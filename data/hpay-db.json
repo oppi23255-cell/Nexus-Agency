@@ -1,6 +1,6 @@
 {
   "config": {
-    "platformName": "egyptpay.trade",
+    "platformName": "Nexus Agency",
     "countryCode": "EG",
     "currencyCode": "EGP",
     "usdRate": 49.85,
@@ -14,7 +14,7 @@
       "userName": null,
       "email": null,
       "route": "/profile",
-      "lastPingAt": "2026-11-20T11:16:50.204Z"
+      "lastPingAt": "2026-11-20T11:29:14.684Z"
     }
   ],
   "onlineCount": 0,
@@ -48,79 +48,13 @@
     }
   ],
   "requisites": [],
-  "deposits": [
-    {
-      "id": "dep_1795173354120",
-      "userId": "usr_1795173354085_241",
-      "orderId": "EG-959801",
-      "accountId": "acc_usr_1795173354085_241",
-      "amountLocal": 1500,
-      "amountUsdt": 30.09,
-      "incomeUsdt": 0,
-      "rate": 49.85,
-      "requisiteId": "req_admin",
-      "bankName": "إيداع فوري من الإدارة",
-      "ownerName": "أحمد VIP",
-      "requisiteNumber": "ahmed_vip",
-      "status": "completed",
-      "createdAt": "2026-11-20T11:15:54.120Z",
-      "expiresAt": "2026-11-20T11:30:54.120Z",
-      "confirmedAt": "2026-11-20T11:15:54.120Z"
-    },
-    {
-      "id": "dep_1795173354100",
-      "userId": "usr_1795173354085_241",
-      "orderId": "EG-891919",
-      "accountId": "acc_usr_1795173354085_241",
-      "amountLocal": 2500,
-      "amountUsdt": 50.15,
-      "incomeUsdt": 0,
-      "rate": 49.85,
-      "requisiteId": "req_admin",
-      "bankName": "إيداع فوري من الإدارة",
-      "ownerName": "أحمد VIP",
-      "requisiteNumber": "ahmed_vip",
-      "status": "completed",
-      "createdAt": "2026-11-20T11:15:54.099Z",
-      "expiresAt": "2026-11-20T11:30:54.100Z",
-      "confirmedAt": "2026-11-20T11:15:54.099Z"
-    }
-  ],
+  "deposits": [],
   "disputes": [],
   "withdrawals": [],
   "androidDevices": [],
   "telegramBots": [],
   "apiKeys": [],
-  "messages": [
-    {
-      "id": "msg_1795173354120",
-      "userId": "usr_1795173354085_241",
-      "deviceId": "admin_desk",
-      "deviceName": "إدارة المنصة",
-      "sender": "إيداع رصيد فوري",
-      "body": "تم إيداع مبلغ 1,500 ج.م ونزوله في حسابك (ahmed_vip) بنجاح. رصيدك الحالي: 5,000 ج.م.",
-      "parsedAmount": 1500,
-      "currency": "EGP",
-      "matchedDepositId": "dep_1795173354120",
-      "matchedOrderId": "EG-959801",
-      "status": "matched",
-      "receivedAt": "2026-11-20T11:15:54.120Z"
-    },
-    {
-      "id": "msg_1795173354100",
-      "userId": "usr_1795173354085_241",
-      "deviceId": "admin_desk",
-      "deviceName": "إدارة المنصة",
-      "sender": "إيداع رصيد فوري",
-      "body": "تم إيداع مبلغ 2,500 ج.م ونزوله في حسابك (ahmed_vip) بنجاح. رصيدك الحالي: 3,500 ج.م.",
-      "parsedAmount": 2500,
-      "currency": "EGP",
-      "matchedDepositId": "dep_1795173354100",
-      "matchedOrderId": "EG-891919",
-      "status": "matched",
-      "receivedAt": "2026-11-20T11:15:54.099Z"
-    }
-  ],
+  "messages": [],
   "topUps": [],
   "referrals": [],
   "settings": {

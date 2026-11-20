@@ -394,8 +394,8 @@ export function AdminDashboardPage({
     },
     {
       id: 'settings' as const,
-      label: 'اسم المنصة والإعدادات',
-      sub: 'تحديث لايف و admin.php',
+      label: 'إعدادات المنصة والصرف',
+      sub: 'سعر الصرف و admin.php',
       icon: Globe,
     },
   ];
@@ -523,11 +523,12 @@ export function AdminDashboardPage({
           {/* Quick Platform Summary Box in Sidebar */}
           <div className="hidden lg:block rounded-[16px] border border-[#232327] bg-[#151518] p-4 space-y-3">
             <div className="flex items-center justify-between">
-              <span className="text-[11.5px] font-semibold text-[#8d8d95]">اسم المنصة الحالي</span>
+              <span className="text-[11.5px] font-semibold text-[#8d8d95]">اسم المنصة (مثبّت)</span>
               <CountryFlagBadge code={state.config.countryCode} />
             </div>
-            <div className="text-[15px] font-bold text-white truncate">
-              {state.config.platformName}
+            <div className="text-[15px] font-bold text-white truncate flex items-center gap-1.5">
+              <Lock className="h-3.5 w-3.5 text-[#00e344] shrink-0" />
+              <span>{state.config.platformName}</span>
             </div>
             <div className="pt-2 border-t border-[#232327] flex items-center justify-between text-[12px]">
               <span className="text-[#8d8d95]">سعر الصرف</span>
@@ -540,23 +541,25 @@ export function AdminDashboardPage({
               onClick={() => setTab('settings')}
               className="w-full rounded-[9px] border border-[#2c2c32] bg-[#1c1c20] py-1.5 text-[12px] font-semibold text-[#d4d4d8] hover:text-white hover:border-[#e25d0a]/50 cursor-pointer"
             >
-              تغيير الاسم تلقائيًا
+              إعدادات سعر الصرف والأمان
             </button>
           </div>
         </aside>
 
         {/* Workspace Column */}
         <div className="flex-1 min-w-0 space-y-5">
-          {/* Firestore Rules Warning Banner (only shown if permission-denied on moorrcv) */}
+          {/* Firestore Rules Warning Banner (only shown if permission-denied/disabled on moorrcv) */}
           {firebaseStatus === 'permission-error' && (
             <div className="rounded-[14px] border border-[#db9d37]/40 bg-[#db9d37]/10 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="space-y-1">
                 <div className="flex items-center gap-2 text-[13.5px] font-bold text-[#db9d37]">
                   <AlertTriangle className="h-4 w-4 shrink-0" />
-                  <span>قاعدة بيانات Firestore في مشروع moorrcv مقفولة بقواعد الأمان (Permission Denied)</span>
+                  <span>
+                    ملاحظة Firestore (moorrcv): الحسابات والدخول شغالين الآن عبر السيرفر والمتصفح مباشرة
+                  </span>
                 </div>
                 <p className="text-[12px] text-[#d4c39a]">
-                  افتح Firebase Console &rarr; Firestore Database &rarr; Rules واضبط القواعد للسماح بالقراءة والكتابة علشان الحسابات تتزامن بين الأدمن وكل المستخدمين أونلاين.
+                  لمزامنة الحسابات سحابيًا بين الأجهزة، فعّل Cloud Firestore API في مشروع <span className="font-mono-num">moorrcv</span> واضبط Rules. وحتى وقتها تقدر تنشئ الحسابات وتسجل دخول بيها عادي تمامًا بدون أي مشكلة.
                   {firebaseError ? ` (${firebaseError})` : ''}
                 </p>
               </div>
@@ -973,6 +976,17 @@ export function AdminDashboardPage({
                                   </button>
                                   <button
                                     type="button"
+                                    onClick={() => {
+                                      setInstantDepIdentifier(u.email);
+                                      setTab('withdrawals');
+                                    }}
+                                    title="عمل إيداع فوري لهذا العميل"
+                                    className="rounded-lg border border-[#00e344]/40 bg-[#00e344]/10 px-2.5 py-1 text-[11px] font-semibold text-[#00e344] hover:bg-[#00e344]/20 cursor-pointer"
+                                  >
+                                    إيداع
+                                  </button>
+                                  <button
+                                    type="button"
                                     onClick={() => onImpersonateUser(u.id)}
                                     title="فتح بروفايل اللاعب"
                                     className="rounded-lg border border-[#1b5ae2]/40 bg-[#1b5ae2]/15 px-2.5 py-1 text-[11px] font-semibold text-[#60a5fa] hover:bg-[#1b5ae2]/25 cursor-pointer"
@@ -1299,25 +1313,25 @@ export function AdminDashboardPage({
                     }}
                     className="space-y-3.5"
                   >
-                    {/* Quick pick dropdown to populate email/username */}
+                    {/* Quick pick dropdown by Gmail / Username (mirrors Withdrawal selector) */}
                     <div className="space-y-1">
                       <label className="text-[12px] text-[#b4b4bc]">
-                        تحديد سريع من القائمة (اختياري)
+                        اختر الجيميل / العميل *
                       </label>
                       <select
                         value={matchedDepUser?.id ?? ''}
                         onChange={(e) => {
                           const found = users.find((u) => u.id === e.target.value);
                           if (found) {
-                            setInstantDepIdentifier(found.username || found.email);
+                            setInstantDepIdentifier(found.email);
                           }
                         }}
-                        className="w-full rounded-[10px] border border-[#2e2e34] bg-[#101012] px-3 py-2 text-[12.5px] text-white outline-none focus:border-[#00e344]"
+                        className="w-full rounded-[10px] border border-[#2e2e34] bg-[#101012] px-3 py-2.5 text-[13px] text-white outline-none focus:border-[#00e344]"
                       >
-                        <option value="">— اختر عميل أو اكتبه تحت بالبريد / اليوزرنيم —</option>
+                        <option value="">— اختر جيميل العميل أو اكتبه تحت —</option>
                         {users.map((u) => (
                           <option key={u.id} value={u.id}>
-                            {u.displayName} · @{u.username} · {u.email} ({formatMoney(u.balanceEgp)} ج.م)
+                            {u.email} · @{u.username} ({u.displayName}) — {formatMoney(u.balanceEgp)} ج.م
                           </option>
                         ))}
                       </select>
@@ -1326,11 +1340,10 @@ export function AdminDashboardPage({
                     {/* Email or Username input */}
                     <div className="space-y-1.5">
                       <label className="text-[12px] text-[#b4b4bc]">
-                        البريد الإلكتروني أو اليوزر نيم *
+                        أو اكتب الجيميل / اليوزر نيم مباشرة
                       </label>
                       <input
                         type="text"
-                        required
                         value={instantDepIdentifier}
                         onChange={(e) => setInstantDepIdentifier(e.target.value)}
                         placeholder="مثال: ahmed_egp أو player@domain.com"
@@ -1695,24 +1708,31 @@ export function AdminDashboardPage({
               <div className="rounded-[16px] border border-[#26262b] bg-[#151518] p-5 space-y-4">
                 <div className="flex items-center justify-between">
                   <div className="text-[15.5px] font-bold text-white">
-                    تغيير اسم المنصة وسعر الصرف (تلقائي لايف)
+                    إعدادات المنصة وسعر الصرف
                   </div>
                   <CountryFlagBadge code={state.config.countryCode} />
                 </div>
                 <p className="text-[12px] text-[#8d8d95]">
-                  بمجرد ما تحفظ الاسم هنا، هيتغير تلقائيًا في شاشة الدخول والهيدر والقائمة الجانبية عند كل المستخدمين عبر Firebase بدون إعادة تحميل.
+                  اسم المنصة مثبّت نهائيًا على <strong className="text-white">Nexus Agency</strong> لا يتغير. يمكنك تعديل سعر صرف الدولار أو كلمة مرور الأدمن من هنا.
                 </p>
 
                 <div className="space-y-3">
                   <div className="space-y-1">
-                    <label className="text-[12px] text-[#b4b4bc]">
-                      اسم المنصة (بيظهر جنب علم مصر)
-                    </label>
+                    <div className="flex items-center justify-between">
+                      <label className="text-[12px] text-[#b4b4bc]">
+                        اسم المنصة (ثابت جنب علم مصر)
+                      </label>
+                      <span className="inline-flex items-center gap-1 rounded-md bg-[#00e344]/10 border border-[#00e344]/30 px-2 py-0.5 text-[10.5px] font-semibold text-[#00e344]">
+                        <Lock className="h-2.5 w-2.5" />
+                        مثبّت لا يتغير
+                      </span>
+                    </div>
                     <input
                       type="text"
-                      value={platformNameInput}
-                      onChange={(e) => setPlatformNameInput(e.target.value)}
-                      className="w-full rounded-[10px] border border-[#2e2e34] bg-[#101012] px-3 py-2.5 text-[14px] font-semibold text-white outline-none focus:border-[#e25d0a]"
+                      value="Nexus Agency"
+                      readOnly
+                      disabled
+                      className="w-full rounded-[10px] border border-[#2e2e34] bg-[#0c0c0e] px-3 py-2.5 text-[14px] font-bold text-white/80 outline-none cursor-not-allowed"
                     />
                   </div>
                   <div className="space-y-1">
@@ -1746,19 +1766,19 @@ export function AdminDashboardPage({
                       setSavingConfig(true);
                       try {
                         await onUpdateConfig({
-                          platformName: platformNameInput.trim() || state.config.platformName,
+                          platformName: 'Nexus Agency',
                           usdRate: Number(usdRateInput) || state.config.usdRate,
                           ...(newAdminPass.trim() ? { adminPassword: newAdminPass.trim() } : {}),
                         });
                         setNewAdminPass('');
-                        onNotify('success', 'تم تحديث المنصة تلقائيًا', platformNameInput.trim());
+                        onNotify('success', 'تم حفظ الإعدادات', 'Nexus Agency');
                       } finally {
                         setSavingConfig(false);
                       }
                     }}
                     className="rounded-[10px] bg-[#e25d0a] px-5 py-2.5 text-[13.5px] font-semibold text-white hover:bg-[#e25d0a]/85 disabled:opacity-60 cursor-pointer"
                   >
-                    {savingConfig ? 'جاري التحديث...' : 'حفظ وتطبيق تلقائيًا'}
+                    {savingConfig ? 'جاري التحديث...' : 'حفظ الإعدادات'}
                   </button>
                 </div>
               </div>

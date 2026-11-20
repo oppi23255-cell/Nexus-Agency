@@ -13,6 +13,7 @@ import {
 } from '../types';
 
 const STORAGE_KEY = 'egyptpay_trader_state_v3';
+export const FIXED_PLATFORM_NAME = 'Nexus Agency';
 
 function minsFromNow(m: number): string {
   return new Date(Date.now() + m * 60_000).toISOString();
@@ -21,7 +22,7 @@ function minsFromNow(m: number): string {
 export function createClientSeedState(): PlatformState {
   return {
     config: {
-      platformName: 'egyptpay.trade',
+      platformName: FIXED_PLATFORM_NAME,
       countryCode: 'EG',
       currencyCode: 'EGP',
       usdRate: 49.85,
@@ -180,7 +181,10 @@ export function loadRawLocalDb(): PlatformState {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as PlatformState;
-      if (parsed.config && Array.isArray(parsed.users)) return parsed;
+      if (parsed.config && Array.isArray(parsed.users)) {
+        parsed.config.platformName = FIXED_PLATFORM_NAME;
+        return parsed;
+      }
     }
   } catch {
     // ignore
@@ -254,7 +258,7 @@ export function executeLocalApi(
       return { ok: false, error: 'الحساب موقوف مؤقتاً من الإدارة' };
     }
     saveLocalState(db);
-    return { ok: true, userId: user.id, state: projectUserView(db, user.id) };
+    return { ok: true, userId: user.id, user, state: projectUserView(db, user.id) };
   }
 
   if (url === '/api/auth/logout') {
@@ -277,26 +281,35 @@ export function executeLocalApi(
 
   if (url === '/api/admin/users' && method === 'POST' && body) {
     const email = String(body.email || '').trim();
-    const password = String(body.password || '');
+    const password = String(body.password || '').trim();
     if (!email || !password) return { ok: false, error: 'البريد وكلمة المرور مطلوبين' };
-    if ((db.users ?? []).some((u) => u.email.toLowerCase() === email.toLowerCase())) {
+    if ((db.users ?? []).some((u) => u.email.trim().toLowerCase() === email.toLowerCase())) {
       return { ok: false, error: 'البريد الإلكتروني مسجل من قبل' };
     }
     const prefix = email.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '') || 'agent';
     const takenPids = new Set((db.users ?? []).map((u) => u.playerId).filter(Boolean));
-    let playerId = `PL-${Math.floor(10000000 + Math.random() * 89999999)}`;
-    while (takenPids.has(playerId)) {
+    let playerId =
+      typeof body.playerId === 'string' && body.playerId.trim()
+        ? body.playerId.trim()
+        : `PL-${Math.floor(10000000 + Math.random() * 89999999)}`;
+    while (!body.playerId && takenPids.has(playerId)) {
       playerId = `PL-${Math.floor(10000000 + Math.random() * 89999999)}`;
     }
     const newUser: ManagedUser = {
-      id: `usr_${Date.now()}`,
+      id:
+        typeof body.id === 'string' && body.id.trim()
+          ? body.id.trim()
+          : `usr_${Date.now()}`,
       playerId,
-      uuid: `01a1a848-${Math.random().toString(16).slice(2, 6)}-7533-a6f9-${Math.random().toString(16).slice(2, 14)}`,
-      username: String(body.username || `${prefix}_egp`),
-      displayName: String(body.displayName || prefix),
+      uuid:
+        typeof body.uuid === 'string' && body.uuid.trim()
+          ? body.uuid.trim()
+          : `01a1a848-${Math.random().toString(16).slice(2, 6)}-7533-a6f9-${Math.random().toString(16).slice(2, 14)}`,
+      username: String(body.username || `${prefix}_egp`).trim(),
+      displayName: String(body.displayName || prefix).trim(),
       email,
       emailLower: email.toLowerCase(),
-      password: password.trim(),
+      password,
       telegramHandle: `@${prefix}`,
       balanceEgp: Number(body.balanceEgp) || 0,
       frozenEgp: 0,
@@ -311,7 +324,7 @@ export function executeLocalApi(
       trc20Address: 'TY9xK8mPq7VwRz4nLp3JdXs2kF9aBc7eW1',
       createdAt: new Date().toISOString(),
     };
-    db.users = [...(db.users ?? []), newUser];
+    db.users = [newUser, ...(db.users ?? [])];
     saveLocalState(db);
     return { ok: true, user: newUser, state: { ...db, onlineCount: prunePresence(db.onlinePresence).length } };
   }
@@ -474,7 +487,7 @@ export function executeLocalApi(
   }
 
   if (url === '/api/admin/config' && body) {
-    if (body.platformName) db.config.platformName = String(body.platformName);
+    db.config.platformName = FIXED_PLATFORM_NAME;
     if (body.usdRate && Number(body.usdRate) > 0) db.config.usdRate = Number(body.usdRate);
     if (body.adminPassword) db.config.adminPassword = String(body.adminPassword);
     saveLocalState(db);

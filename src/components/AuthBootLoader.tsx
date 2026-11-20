@@ -5,7 +5,7 @@ export function AuthBootLoader({
   phase,
   error,
   lang = 'ar',
-  platformName = 'egyptpay.trade',
+  platformName = 'Nexus Agency',
   countryCode = 'EG',
   onRetry,
 }: {

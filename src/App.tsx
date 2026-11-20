@@ -6,6 +6,7 @@ import { Sidebar } from './components/Sidebar';
 import { ToastContainer } from './components/ToastContainer';
 import { TopHeader } from './components/TopHeader';
 import {
+  FIXED_PLATFORM_NAME,
   addFirestoreRequisite,
   addFirestoreTopUp,
   createFirestoreDeposit,
@@ -193,16 +194,17 @@ export default function App() {
   }, []);
 
   const applyConfigToStates = useCallback((cfg: PlatformConfig) => {
+    const lockedCfg: PlatformConfig = { ...cfg, platformName: FIXED_PLATFORM_NAME };
     const db = loadRawLocalDb();
-    db.config = { ...db.config, ...cfg };
+    db.config = { ...db.config, ...lockedCfg };
     saveLocalState(db);
 
     setState((prev) =>
       prev
         ? {
             ...prev,
-            config: { ...prev.config, ...cfg },
-            accounts: prev.accounts.map((a) => ({ ...a, rate: cfg.usdRate || a.rate })),
+            config: { ...prev.config, ...lockedCfg },
+            accounts: prev.accounts.map((a) => ({ ...a, rate: lockedCfg.usdRate || a.rate })),
           }
         : prev
     );
@@ -210,7 +212,7 @@ export default function App() {
       prev
         ? {
             ...prev,
-            config: { ...prev.config, ...cfg },
+            config: { ...prev.config, ...lockedCfg },
           }
         : prev
     );
@@ -339,9 +341,9 @@ export default function App() {
         if (fsCfg.ok) {
           setFirebaseStatus('connected');
           setFirebaseError(null);
-        } else if (fsCfg.permissionError) {
+        } else if (fsCfg.permissionError || fsCfg.unavailable) {
           setFirebaseStatus('permission-error');
-          setFirebaseError(fsCfg.errorMessage || 'Missing or insufficient permissions');
+          setFirebaseError(fsCfg.errorMessage || 'Firestore API unavailable or permission denied');
         }
 
         const ct = res?.headers.get('content-type') || '';
@@ -352,15 +354,18 @@ export default function App() {
           loaded = (await res.json()) as PlatformState;
         }
 
-        if (fsCfg.ok && fsCfg.config) {
-          loaded = {
-            ...loaded,
-            config: { ...loaded.config, ...fsCfg.config },
-          };
-          const db = loadRawLocalDb();
-          db.config = { ...db.config, ...fsCfg.config };
-          saveLocalState(db);
-        }
+        const mergedConfig: PlatformConfig = {
+          ...loaded.config,
+          ...(fsCfg.ok && fsCfg.config ? fsCfg.config : {}),
+          platformName: FIXED_PLATFORM_NAME,
+        };
+        loaded = {
+          ...loaded,
+          config: mergedConfig,
+        };
+        const db = loadRawLocalDb();
+        db.config = { ...db.config, ...mergedConfig };
+        saveLocalState(db);
         applyLoadedState(loaded);
       } catch {
         try {
@@ -475,12 +480,22 @@ export default function App() {
         setFirebaseStatus('connected');
         setAdminState((prev) => {
           const base = prev ?? { ...loadRawLocalDb(), ...(state || {}) };
-          return { ...base, users: fsUsers };
+          const existing = base.users ?? [];
+          if (fsUsers.length === 0 && existing.length > 0) {
+            return base;
+          }
+          const byId = new Map<string, ManagedUser>();
+          for (const u of existing) byId.set(u.id, u);
+          for (const u of fsUsers) byId.set(u.id, u);
+          return { ...base, users: Array.from(byId.values()) };
         });
       },
       onPresence: (entries) => {
         setAdminState((prev) => {
           const base = prev ?? { ...loadRawLocalDb(), ...(state || {}) };
+          if (entries.length === 0 && (base.onlinePresence?.length ?? 0) > 0) {
+            return base;
+          }
           return {
             ...base,
             onlinePresence: entries,
@@ -489,16 +504,29 @@ export default function App() {
         });
       },
       onWithdrawals: (withdrawals) => {
-        setAdminState((prev) => (prev ? { ...prev, withdrawals } : prev));
+        setAdminState((prev) => {
+          if (!prev) return prev;
+          if (withdrawals.length === 0 && prev.withdrawals.length > 0) return prev;
+          return { ...prev, withdrawals };
+        });
       },
       onDeposits: (deposits) => {
-        setAdminState((prev) => (prev ? { ...prev, deposits } : prev));
+        setAdminState((prev) => {
+          if (!prev) return prev;
+          if (deposits.length === 0 && prev.deposits.length > 0) return prev;
+          return { ...prev, deposits };
+        });
       },
       onMessages: (messages) => {
-        setAdminState((prev) => (prev ? { ...prev, messages } : prev));
+        setAdminState((prev) => {
+          if (!prev) return prev;
+          if (messages.length === 0 && prev.messages.length > 0) return prev;
+          return { ...prev, messages };
+        });
       },
       onError: (err) => {
-        if (err.message.toLowerCase().includes('permission')) {
+        const lower = err.message.toLowerCase();
+        if (lower.includes('permission') || lower.includes('unavailable') || lower.includes('firestore.googleapis.com')) {
           setFirebaseStatus('permission-error');
           setFirebaseError(err.message);
         }
@@ -598,53 +626,69 @@ export default function App() {
     const cleanEmail = email.trim();
     const cleanPass = password.trim();
 
-    // 1. Check Firebase Firestore (moorrcv) first — primary global source of truth
-    const fsRes = await loginFirestoreUser(cleanEmail, cleanPass);
-    if (fsRes.ok && fsRes.user) {
-      const uid = fsRes.user.id;
+    const completeLogin = (uid: string, userObj?: ManagedUser | null, nextState?: PlatformState) => {
       setUserSessionId(uid);
-      writeCachedUser(fsRes.user);
-      upsertUserIntoLocalDb(fsRes.user);
       try {
         localStorage.setItem(USER_SESSION_KEY, uid);
       } catch {
         // ignore
       }
-      setState((prev) => buildPlatformStateForUser(prev ?? loadLocalState(null), fsRes.user!));
+      if (userObj) {
+        writeCachedUser(userObj);
+        upsertUserIntoLocalDb(userObj);
+        syncUserToFirestore(userObj).catch(() => undefined);
+      }
+      if (nextState) {
+        setState({
+          ...nextState,
+          config: { ...nextState.config, platformName: FIXED_PLATFORM_NAME },
+        });
+      } else if (userObj) {
+        setState((prev) => buildPlatformStateForUser(prev ?? loadLocalState(null), userObj));
+      }
       navigate('/profile');
       return { ok: true };
+    };
+
+    // 1. Check Firebase Firestore (moorrcv) first
+    const fsRes = await loginFirestoreUser(cleanEmail, cleanPass);
+    if (fsRes.ok && fsRes.user) {
+      return completeLogin(fsRes.user.id, fsRes.user);
     }
 
-    // 2. Fallback to Express /api + localStorage (covers accounts created when Firestore was offline/restricted)
-    const localRes = await apiCall('/api/auth/login', 'POST', {
+    // 2. Check Express API (/api/auth/login)
+    const apiRes = await apiCall('/api/auth/login', 'POST', {
+      email: cleanEmail,
+      password: cleanPass,
+    });
+    if (apiRes && apiRes.ok && apiRes.userId) {
+      const uid = String(apiRes.userId);
+      const apiUser = (apiRes.user as ManagedUser | undefined) ??
+        (loadRawLocalDb().users ?? []).find((u) => u.id === uid) ??
+        null;
+      return completeLogin(uid, apiUser, apiRes.state as PlatformState | undefined);
+    }
+
+    // 3. Always check browser localStorage DB even if Express returned 401 (covers offline/static/admin fallback creations)
+    const localRes = executeLocalApi('/api/auth/login', 'POST', {
       email: cleanEmail,
       password: cleanPass,
     });
     if (localRes && localRes.ok && localRes.userId) {
       const uid = String(localRes.userId);
-      setUserSessionId(uid);
-      try {
-        localStorage.setItem(USER_SESSION_KEY, uid);
-      } catch {
-        // ignore
-      }
-      if (localRes.state) {
-        const st = localRes.state as PlatformState;
-        setState(st);
-        const db = loadRawLocalDb();
-        const found = (db.users ?? []).find((u) => u.id === uid);
-        if (found) {
-          writeCachedUser(found);
-          syncUserToFirestore(found).catch(() => undefined);
-        }
-      }
-      navigate('/profile');
-      return { ok: true };
+      const localUser = (localRes.user as ManagedUser | undefined) ??
+        (loadRawLocalDb().users ?? []).find((u) => u.id === uid) ??
+        null;
+      return completeLogin(uid, localUser, localRes.state as PlatformState | undefined);
     }
 
     return {
       ok: false,
-      error: fsRes.error || localRes?.error || 'البريد الإلكتروني أو كلمة المرور غير صحيحة',
+      error:
+        (!fsRes.unavailable ? fsRes.error : undefined) ||
+        (apiRes?.error as string | undefined) ||
+        (localRes?.error as string | undefined) ||
+        'البريد الإلكتروني أو كلمة المرور غير صحيحة',
     };
   };
 
@@ -679,7 +723,7 @@ export default function App() {
         phase={bootPhase === 'done' ? 'accounts' : bootPhase}
         error={bootError}
         lang={state?.settings.lang ?? 'ar'}
-        platformName={state?.config?.platformName ?? 'egyptpay.trade'}
+        platformName={state?.config?.platformName ?? FIXED_PLATFORM_NAME}
         countryCode={state?.config?.countryCode ?? 'EG'}
         onRetry={() => fetchState(true)}
       />
@@ -751,14 +795,20 @@ export default function App() {
               setFirebaseStatus('connected');
               setFirebaseError(null);
               upsertUserIntoLocalDb(fsRes.user);
-              // Mirror to Express if running
+              // Mirror exact same id + playerId to Express if running
               fetch('/api/admin/users', {
                 method: 'POST',
                 headers: {
                   'Content-Type': 'application/json',
                   ...(adminPassword ? { 'x-admin-password': adminPassword } : {}),
                 },
-                body: JSON.stringify(payload),
+                body: JSON.stringify({
+                  ...payload,
+                  id: fsRes.user.id,
+                  playerId: fsRes.user.playerId,
+                  uuid: fsRes.user.uuid,
+                  referralCode: fsRes.user.referralCode,
+                }),
               }).catch(() => undefined);
               setAdminState((prev) =>
                 prev
@@ -771,20 +821,53 @@ export default function App() {
               return { ok: true, user: fsRes.user };
             }
 
-            if (fsRes.permissionError) {
-              setFirebaseStatus('permission-error');
-              setFirebaseError(fsRes.error || 'Firestore permission denied');
-              // Fallback to local/Express so admin isn't blocked even before opening rules
-              const fallbackRes = await apiCall('/api/admin/users', 'POST', payload);
-              return fallbackRes as { ok: boolean; error?: string; user?: ManagedUser };
-            }
-
             if (fsRes.error) {
               return { ok: false, error: fsRes.error };
             }
 
-            const res = await apiCall('/api/admin/users', 'POST', payload);
-            return res as { ok: boolean; error?: string; user?: ManagedUser };
+            if (fsRes.permissionError || fsRes.unavailable) {
+              setFirebaseStatus('permission-error');
+              setFirebaseError('Firestore غير مفعّل في مشروع moorrcv — تم الحفظ في السيرفر والمتصفح');
+            }
+
+            // Persist in Express + localStorage seamlessly so login works immediately
+            const res = (await apiCall('/api/admin/users', 'POST', payload)) as {
+              ok: boolean;
+              error?: string;
+              user?: ManagedUser;
+            };
+            if (res.ok && res.user) {
+              upsertUserIntoLocalDb(res.user);
+              setAdminState((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      users: [res.user!, ...(prev.users ?? []).filter((u) => u.id !== res.user!.id)],
+                    }
+                  : prev
+              );
+            } else if (!res.ok && (!res.error || res.error === 'Unauthorized')) {
+              const localCreated = executeLocalApi('/api/admin/users', 'POST', payload) as {
+                ok: boolean;
+                error?: string;
+                user?: ManagedUser;
+              };
+              if (localCreated.ok && localCreated.user) {
+                setAdminState((prev) =>
+                  prev
+                    ? {
+                        ...prev,
+                        users: [
+                          localCreated.user!,
+                          ...(prev.users ?? []).filter((u) => u.id !== localCreated.user!.id),
+                        ],
+                      }
+                    : prev
+                );
+              }
+              return localCreated;
+            }
+            return res;
           }}
           onUpdateUser={async (id, patch: Partial<ManagedUser>) => {
             await updateFirestoreUser(id, patch).catch(() => undefined);
@@ -906,14 +989,19 @@ export default function App() {
           onUpdateConfig={async (patch) => {
             const nextCfg: PlatformConfig = {
               ...(adminState?.config ?? state.config),
-              ...(patch.platformName ? { platformName: patch.platformName } : {}),
               ...(patch.usdRate ? { usdRate: patch.usdRate } : {}),
               ...(patch.adminPassword ? { adminPassword: patch.adminPassword } : {}),
+              platformName: FIXED_PLATFORM_NAME,
             };
             applyConfigToStates(nextCfg);
             broadcastSync('config', nextCfg);
-            await updateFirestoreConfig(patch).catch(() => undefined);
-            await apiCall('/api/admin/config', 'PATCH', patch);
+            await updateFirestoreConfig({ ...patch, platformName: FIXED_PLATFORM_NAME }).catch(
+              () => undefined
+            );
+            await apiCall('/api/admin/config', 'PATCH', {
+              ...patch,
+              platformName: FIXED_PLATFORM_NAME,
+            });
             if (patch.adminPassword) {
               setAdminPassword(patch.adminPassword);
               try {

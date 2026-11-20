@@ -15,7 +15,7 @@ function loadDb(string $path): array {
     if (!file_exists($path)) {
         $seed = [
             'config' => [
-                'platformName' => 'egyptpay.trade',
+                'platformName' => 'Nexus Agency',
                 'countryCode' => 'EG',
                 'currencyCode' => 'EGP',
                 'usdRate' => 49.85,
@@ -32,7 +32,11 @@ function loadDb(string $path): array {
     }
     $raw = file_get_contents($path);
     $decoded = json_decode($raw ?: '{}', true);
-    return is_array($decoded) ? $decoded : [];
+    if (is_array($decoded)) {
+        $decoded['config']['platformName'] = 'Nexus Agency';
+        return $decoded;
+    }
+    return [];
 }
 
 function saveDb(string $path, array $data): void {
@@ -106,29 +110,36 @@ if ($isAuthed && $_SERVER['REQUEST_METHOD'] === 'POST') {
             } else {
                 $newId = 'usr_' . time() . '_' . random_int(100, 999);
                 $prefix = preg_replace('/[^a-zA-Z0-9_]/', '', explode('@', $email)[0]) ?: 'agent';
+                $takenPids = array_map(fn($u) => (string)($u['playerId'] ?? ''), $db['users'] ?? []);
+                $playerId = 'PL-' . random_int(10000000, 99999999);
+                while (in_array($playerId, $takenPids, true)) {
+                    $playerId = 'PL-' . random_int(10000000, 99999999);
+                }
                 $db['users'][] = [
                     'id' => $newId,
+                    'playerId' => $playerId,
                     'uuid' => uuidV4(),
                     'username' => $username !== '' ? $username : ($prefix . '_egp'),
                     'displayName' => $displayName !== '' ? $displayName : $prefix,
                     'email' => $email,
+                    'emailLower' => strtolower($email),
                     'password' => $password,
                     'telegramHandle' => '@' . $prefix,
-                    'balanceEgp' => $balanceEgp,
+                    'balanceEgp' => 0.0,
                     'frozenEgp' => 0,
                     'insuranceEgp' => null,
                     'canTrade' => true,
                     'active' => true,
                     'depositFeePct' => 3.0,
                     'withdrawalFeePct' => 1.8,
-                    'referralCode' => 'EG-' . strtoupper(substr(bin2hex(random_bytes(3)), 0, 6)),
+                    'referralCode' => 'EG-' . str_replace('PL-', '', $playerId),
                     'referralRatePct' => 0.5,
                     'twoFactorEnabled' => true,
                     'trc20Address' => 'TY9xK8mPq7VwRz4nLp3JdXs2kF9aBc7eW1',
                     'createdAt' => gmdate('c'),
                 ];
                 saveDb($dbPath, $db);
-                $flash = 'تم إنشاء حساب المستخدم بنجاح: ' . $email;
+                $flash = 'تم إنشاء حساب المستخدم بنجاح: ' . $email . ' (' . $playerId . ')';
             }
         }
     } elseif ($act === 'update_user') {
@@ -212,14 +223,94 @@ if ($isAuthed && $_SERVER['REQUEST_METHOD'] === 'POST') {
 
         saveDb($dbPath, $db);
         $flash = "تم إرسال طلب السحب $orderCode إلى رسايل المستخدم";
+    } elseif ($act === 'send_deposit') {
+        $uid = trim((string)($_POST['userId'] ?? ''));
+        $identifier = strtolower(trim((string)($_POST['identifier'] ?? '')));
+        $idNoAt = ltrim($identifier, '@');
+        $amountEgp = max(1, (float)($_POST['amountEgp'] ?? 0));
+        $bankName = trim((string)($_POST['bankName'] ?? 'إيداع فوري من الإدارة'));
+        if ($bankName === '') {
+            $bankName = 'إيداع فوري من الإدارة';
+        }
+        $note = trim((string)($_POST['note'] ?? ''));
+
+        $matchedIdx = null;
+        foreach (($db['users'] ?? []) as $idx => $u) {
+            $uEmail = strtolower(trim((string)($u['email'] ?? '')));
+            $uUser = ltrim(strtolower(trim((string)($u['username'] ?? ''))), '@');
+            $uPid = strtolower(trim((string)($u['playerId'] ?? '')));
+            if (
+                ($uid !== '' && ($u['id'] ?? '') === $uid) ||
+                ($identifier !== '' && ($uEmail === $identifier || $uUser === $idNoAt || $uPid === $identifier))
+            ) {
+                $matchedIdx = $idx;
+                break;
+            }
+        }
+
+        if ($matchedIdx === null) {
+            $error = 'لم يتم العثور على العميل بالجيميل أو اليوزر نيم ده';
+        } else {
+            $target = $db['users'][$matchedIdx];
+            $newBalance = round((float)($target['balanceEgp'] ?? 0) + $amountEgp, 2);
+            $db['users'][$matchedIdx]['balanceEgp'] = $newBalance;
+
+            $rate = max(1.0, (float)($db['config']['usdRate'] ?? 49.85));
+            $depId = 'dep_' . time() . '_' . random_int(100, 999);
+            $orderId = 'EG-' . random_int(884200, 974200);
+            $nowIso = gmdate('c');
+
+            if (!isset($db['deposits']) || !is_array($db['deposits'])) {
+                $db['deposits'] = [];
+            }
+            array_unshift($db['deposits'], [
+                'id' => $depId,
+                'userId' => $target['id'],
+                'orderId' => $orderId,
+                'accountId' => 'acc_' . $target['id'],
+                'amountLocal' => $amountEgp,
+                'amountUsdt' => round($amountEgp / $rate, 2),
+                'incomeUsdt' => 0,
+                'rate' => $rate,
+                'requisiteId' => 'req_admin_direct',
+                'bankName' => $bankName,
+                'ownerName' => $target['displayName'],
+                'requisiteNumber' => $target['username'],
+                'status' => 'completed',
+                'createdAt' => $nowIso,
+                'expiresAt' => gmdate('c', time() + 900),
+                'confirmedAt' => $nowIso,
+            ]);
+
+            if (!isset($db['messages']) || !is_array($db['messages'])) {
+                $db['messages'] = [];
+            }
+            array_unshift($db['messages'], [
+                'id' => 'msg_' . time() . '_' . random_int(100, 999),
+                'userId' => $target['id'],
+                'deviceId' => 'admin_desk',
+                'deviceName' => 'إدارة المنصة',
+                'sender' => 'إيداع رصيد فوري',
+                'body' => $note !== '' ? $note : ("تم إيداع مبلغ " . number_format($amountEgp, 2) . " ج.م في حسابك ({$target['email']}) بنجاح. رصيدك الحالي: " . number_format($newBalance, 2) . " ج.م."),
+                'parsedAmount' => $amountEgp,
+                'currency' => 'EGP',
+                'matchedDepositId' => $depId,
+                'matchedOrderId' => $orderId,
+                'status' => 'matched',
+                'receivedAt' => $nowIso,
+            ]);
+
+            saveDb($dbPath, $db);
+            $flash = "تم إيداع " . number_format($amountEgp, 2) . " ج.م لحساب {$target['email']} (@{$target['username']}) ونزل في الرصيد فورًا";
+        }
     } elseif ($act === 'update_config') {
-        $db['config']['platformName'] = trim((string)($_POST['platformName'] ?? $db['config']['platformName']));
+        $db['config']['platformName'] = 'Nexus Agency';
         $db['config']['usdRate'] = (float)($_POST['usdRate'] ?? $db['config']['usdRate']);
         if (trim((string)($_POST['adminPassword'] ?? '')) !== '') {
             $db['config']['adminPassword'] = trim((string)$_POST['adminPassword']);
         }
         saveDb($dbPath, $db);
-        $flash = 'تم حفظ إعدادات المنصة';
+        $flash = 'تم حفظ إعدادات المنصة (Nexus Agency مثبّت)';
     }
 }
 
@@ -235,7 +326,7 @@ $totalBalance = array_reduce($db['users'] ?? [], fn($c, $u) => $c + (float)($u['
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>لوحة تحكم الأدمن — <?= e((string)($db['config']['platformName'] ?? 'egyptpay.trade')) ?></title>
+  <title>لوحة تحكم الأدمن — Nexus Agency</title>
   <style>
     * { box-sizing: border-box; font-family: system-ui, -apple-system, 'Segoe UI', Tahoma, sans-serif; }
     body { margin: 0; background: #141414; color: #fff; }
@@ -273,7 +364,7 @@ $totalBalance = array_reduce($db['users'] ?? [], fn($c, $u) => $c + (float)($u['
 <?php else: ?>
   <div class="header">
     <div style="font-weight:800;font-size:17px;">
-      🇪🇬 <?= e((string)($db['config']['platformName'] ?? 'egyptpay.trade')) ?> · <span style="color:#e25d0a;">admin.php</span>
+      🇪🇬 Nexus Agency · <span style="color:#e25d0a;">admin.php</span>
     </div>
     <div style="display:flex;gap:10px;align-items:center;">
       <span class="badge-live">● أونلاين دلوقتي: <?= count($onlineUsers) ?></span>
@@ -300,12 +391,12 @@ $totalBalance = array_reduce($db['users'] ?? [], fn($c, $u) => $c + (float)($u['
       </div>
     </div>
 
-    <div class="grid" style="grid-template-columns:1fr 1fr;">
+    <div class="grid" style="grid-template-columns:repeat(auto-fit, minmax(300px, 1fr));">
       <form method="post" class="card">
-        <h3 style="margin-top:0;">إنشاء حساب مستخدم جديد</h3>
+        <h3 style="margin-top:0;">إنشاء حساب مستخدم جديد (رصيد 0 ج.م)</h3>
         <input type="hidden" name="action" value="create_user" />
-        <label>البريد الإلكتروني</label>
-        <input type="email" name="email" required placeholder="agent@domain.com" />
+        <label>البريد الإلكتروني (الجيميل)</label>
+        <input type="email" name="email" required placeholder="agent@gmail.com" />
         <label>كلمة المرور</label>
         <input type="text" name="password" required placeholder="كلمة المرور" />
         <label>الاسم</label>
@@ -318,11 +409,11 @@ $totalBalance = array_reduce($db['users'] ?? [], fn($c, $u) => $c + (float)($u['
       <form method="post" class="card">
         <h3 style="margin-top:0;">إرسال طلب سحب لمستخدم (يظهر في الرسايل)</h3>
         <input type="hidden" name="action" value="send_withdrawal" />
-        <label>اختر المستخدم</label>
+        <label>اختر المستخدم بالجيميل</label>
         <select name="userId" required>
           <?php foreach (($db['users'] ?? []) as $u): ?>
             <option value="<?= e((string)$u['id']) ?>">
-              <?= e((string)$u['displayName']) ?> (<?= e((string)$u['email']) ?>) — <?= number_format((float)$u['balanceEgp'], 2) ?> ج.م
+              <?= e((string)$u['email']) ?> (<?= e((string)$u['displayName']) ?>) — <?= number_format((float)$u['balanceEgp'], 2) ?> ج.م
             </option>
           <?php endforeach; ?>
         </select>
@@ -336,7 +427,30 @@ $totalBalance = array_reduce($db['users'] ?? [], fn($c, $u) => $c + (float)($u['
         <input type="text" name="recipientName" value="عميل سحب" />
         <label>نص الرسالة</label>
         <textarea name="note" rows="2" placeholder="برجاء تأكيد طلب السحب لخصم المبلغ أو رفضه"></textarea>
-        <button type="submit" class="btn btn-green" style="margin-top:14px;width:100%;">إرسال طلب السحب للمستخدم</button>
+        <button type="submit" class="btn btn-orange" style="margin-top:14px;width:100%;">إرسال طلب السحب للمستخدم</button>
+      </form>
+
+      <form method="post" class="card" style="border-color:rgba(0,227,68,.35);">
+        <h3 style="margin-top:0;color:#00e344;">عمل إيداع لمستخدم (بالجيميل أو اليوزر)</h3>
+        <input type="hidden" name="action" value="send_deposit" />
+        <label>اختر الجيميل بتاع العميل</label>
+        <select name="userId">
+          <option value="">— اختر من القائمة أو اكتب تحت —</option>
+          <?php foreach (($db['users'] ?? []) as $u): ?>
+            <option value="<?= e((string)$u['id']) ?>">
+              <?= e((string)$u['email']) ?> (@<?= e((string)$u['username']) ?>) — <?= number_format((float)$u['balanceEgp'], 2) ?> ج.م
+            </option>
+          <?php endforeach; ?>
+        </select>
+        <label>أو اكتب الجيميل / اليوزرنيم</label>
+        <input type="text" name="identifier" placeholder="user@gmail.com أو ahmed_egp" />
+        <label>مبلغ الإيداع (جنيه مصري)</label>
+        <input type="number" step="0.01" min="1" name="amountEgp" value="1000" required />
+        <label>طريقة الإيداع</label>
+        <input type="text" name="bankName" value="إيداع فوري من الإدارة" />
+        <label>ملاحظة (اختياري)</label>
+        <input type="text" name="note" placeholder="تم إضافة الرصيد تلقائيًا" />
+        <button type="submit" class="btn btn-green" style="margin-top:14px;width:100%;">إضافة الإيداع ونزوله فورًا</button>
       </form>
     </div>
 
@@ -346,8 +460,9 @@ $totalBalance = array_reduce($db['users'] ?? [], fn($c, $u) => $c + (float)($u['
         <table>
           <thead>
             <tr>
-              <th>الاسم</th>
-              <th>البريد الإلكتروني</th>
+              <th>ID اللاعب</th>
+              <th>الاسم واليوزر</th>
+              <th>البريد الإلكتروني (الجيميل)</th>
               <th>كلمة المرور</th>
               <th>الرصيد (ج.م)</th>
               <th>إجراء</th>
@@ -356,7 +471,8 @@ $totalBalance = array_reduce($db['users'] ?? [], fn($c, $u) => $c + (float)($u['
           <tbody>
             <?php foreach (($db['users'] ?? []) as $u): ?>
               <tr>
-                <td><?= e((string)$u['displayName']) ?></td>
+                <td style="color:#e25d0a;font-weight:700;"><?= e((string)($u['playerId'] ?? $u['id'])) ?></td>
+                <td><?= e((string)$u['displayName']) ?> <span style="color:#888;">(@<?= e((string)$u['username']) ?>)</span></td>
                 <td><?= e((string)$u['email']) ?></td>
                 <td><?= e((string)$u['password']) ?></td>
                 <td style="color:#00e344;font-weight:700;"><?= number_format((float)$u['balanceEgp'], 2) ?> ج.م</td>
@@ -374,11 +490,41 @@ $totalBalance = array_reduce($db['users'] ?? [], fn($c, $u) => $c + (float)($u['
       </div>
     </div>
 
+    <div class="card">
+      <h3 style="margin-top:0;">سجل الإيداعات (<?= count($db['deposits'] ?? []) ?>)</h3>
+      <div style="overflow-x:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>رقم العملية</th>
+              <th>العميل / اليوزر</th>
+              <th>المبلغ (ج.م)</th>
+              <th>الطريقة</th>
+              <th>الحالة</th>
+              <th>التاريخ</th>
+            </tr>
+          </thead>
+          <tbody>
+            <?php foreach (array_slice($db['deposits'] ?? [], 0, 25) as $d): ?>
+              <tr>
+                <td><?= e((string)($d['orderId'] ?? '')) ?></td>
+                <td><?= e((string)($d['ownerName'] ?? '')) ?> <span style="color:#888;">(<?= e((string)($d['requisiteNumber'] ?? '')) ?>)</span></td>
+                <td style="color:#00e344;font-weight:700;">+<?= number_format((float)($d['amountLocal'] ?? 0), 2) ?> ج.م</td>
+                <td><?= e((string)($d['bankName'] ?? '')) ?></td>
+                <td><?= e((string)($d['status'] ?? '')) ?></td>
+                <td style="color:#888;font-size:12px;"><?= e((string)($d['createdAt'] ?? '')) ?></td>
+              </tr>
+            <?php endforeach; ?>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
     <form method="post" class="card">
       <h3 style="margin-top:0;">إعدادات المنصة</h3>
       <input type="hidden" name="action" value="update_config" />
-      <label>اسم المنصة</label>
-      <input type="text" name="platformName" value="<?= e((string)($db['config']['platformName'] ?? 'egyptpay.trade')) ?>" />
+      <label>اسم المنصة (مثبّت لا يتغير)</label>
+      <input type="text" name="platformName" value="Nexus Agency" readonly disabled style="opacity:.75;cursor:not-allowed;" />
       <label>سعر الدولار مقابل الجنيه المصري</label>
       <input type="number" step="0.01" name="usdRate" value="<?= e((string)($db['config']['usdRate'] ?? 49.85)) ?>" />
       <label>كلمة مرور الأدمن الجديدة (اختياري)</label>

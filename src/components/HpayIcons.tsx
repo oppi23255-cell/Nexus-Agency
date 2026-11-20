@@ -78,7 +78,7 @@ export function CountryFlagBadge({ code = 'EG' }: { code?: 'SA' | 'EG' | 'AE' | 
 export function HostapayLogo({
   collapsed = false,
   countryCode = 'EG',
-  platformName = 'egyptpay.trade',
+  platformName = 'Nexus Agency',
 }: {
   collapsed?: boolean;
   countryCode?: 'SA' | 'EG' | 'AE' | 'KG';

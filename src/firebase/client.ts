@@ -56,13 +56,59 @@ export const COL_REQUISITES = collection(firestoreDb, 'hpay_requisites');
 export const COL_TOPUPS = collection(firestoreDb, 'hpay_topups');
 export const COL_PRESENCE = collection(firestoreDb, 'hpay_presence');
 
+export const FIXED_PLATFORM_NAME = 'Nexus Agency';
+
 export const DEFAULT_CONFIG: PlatformConfig = {
-  platformName: 'egyptpay.trade',
+  platformName: FIXED_PLATFORM_NAME,
   countryCode: 'EG',
   currencyCode: 'EGP',
   usdRate: 49.85,
   adminPassword: 'admin123',
 };
+
+function withTimeout<T>(promise: Promise<T>, ms = 3200): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('firestore_timeout')), ms);
+    promise.then(
+      (val) => {
+        clearTimeout(timer);
+        resolve(val);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
+function classifyFirestoreError(err: unknown): {
+  permissionError: boolean;
+  unavailable: boolean;
+  message: string;
+} {
+  const msg = err instanceof Error ? err.message : String(err || 'Firebase error');
+  const lower = msg.toLowerCase();
+  const code =
+    typeof err === 'object' && err !== null && 'code' in err
+      ? String((err as { code?: unknown }).code || '').toLowerCase()
+      : '';
+
+  const permissionError =
+    lower.includes('permission') || code.includes('permission-denied');
+  const unavailable =
+    permissionError ||
+    lower.includes('offline') ||
+    lower.includes('unavailable') ||
+    lower.includes('firestore_timeout') ||
+    lower.includes('firestore.googleapis.com') ||
+    lower.includes('network') ||
+    lower.includes('failed to get document') ||
+    code.includes('unavailable') ||
+    code.includes('failed-precondition');
+
+  return { permissionError, unavailable, message: msg };
+}
 
 /**
  * Generates a unique, cryptographically random Player ID (e.g., PL-83920417)
@@ -96,21 +142,30 @@ export async function ensureFirestoreConfig(): Promise<{
   ok: boolean;
   config?: PlatformConfig;
   permissionError?: boolean;
+  unavailable?: boolean;
   errorMessage?: string;
 }> {
   try {
-    const snap = await getDoc(COL_CONFIG_DOC);
+    const snap = await withTimeout(getDoc(COL_CONFIG_DOC));
     if (!snap.exists()) {
-      await setDoc(COL_CONFIG_DOC, DEFAULT_CONFIG);
+      await withTimeout(setDoc(COL_CONFIG_DOC, DEFAULT_CONFIG)).catch(() => undefined);
       return { ok: true, config: DEFAULT_CONFIG };
     }
-    return { ok: true, config: { ...DEFAULT_CONFIG, ...(snap.data() as Partial<PlatformConfig>) } };
+    return {
+      ok: true,
+      config: {
+        ...DEFAULT_CONFIG,
+        ...(snap.data() as Partial<PlatformConfig>),
+        platformName: FIXED_PLATFORM_NAME,
+      },
+    };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Firebase connection error';
+    const info = classifyFirestoreError(err);
     return {
       ok: false,
-      permissionError: msg.toLowerCase().includes('permission'),
-      errorMessage: msg,
+      permissionError: info.permissionError,
+      unavailable: info.unavailable,
+      errorMessage: info.message,
     };
   }
 }
@@ -122,12 +177,16 @@ export async function verifyFirestoreAdminPassword(password: string): Promise<{
   permissionError?: boolean;
 }> {
   try {
-    const snap = await getDoc(COL_CONFIG_DOC);
-    const cfg = snap.exists()
-      ? { ...DEFAULT_CONFIG, ...(snap.data() as Partial<PlatformConfig>) }
+    const snap = await withTimeout(getDoc(COL_CONFIG_DOC));
+    const cfg: PlatformConfig = snap.exists()
+      ? {
+          ...DEFAULT_CONFIG,
+          ...(snap.data() as Partial<PlatformConfig>),
+          platformName: FIXED_PLATFORM_NAME,
+        }
       : DEFAULT_CONFIG;
     if (!snap.exists()) {
-      await setDoc(COL_CONFIG_DOC, DEFAULT_CONFIG).catch(() => undefined);
+      await withTimeout(setDoc(COL_CONFIG_DOC, DEFAULT_CONFIG)).catch(() => undefined);
     }
     const expected = (cfg.adminPassword || 'admin123').trim();
     if (password.trim() === expected) {
@@ -135,29 +194,31 @@ export async function verifyFirestoreAdminPassword(password: string): Promise<{
     }
     return { ok: false, config: cfg };
   } catch (err) {
-    const msg = err instanceof Error ? err.message.toLowerCase() : '';
+    const info = classifyFirestoreError(err);
     return {
       ok: false,
       unavailable: true,
-      permissionError: msg.includes('permission'),
+      permissionError: info.permissionError,
     };
   }
 }
 
 export async function syncUserToFirestore(user: ManagedUser): Promise<void> {
   try {
-    await setDoc(
-      doc(firestoreDb, 'hpay_users', user.id),
-      {
-        ...user,
-        email: user.email.trim(),
-        emailLower: user.email.trim().toLowerCase(),
-        password: user.password.trim(),
-      },
-      { merge: true }
+    await withTimeout(
+      setDoc(
+        doc(firestoreDb, 'hpay_users', user.id),
+        {
+          ...user,
+          email: user.email.trim(),
+          emailLower: user.email.trim().toLowerCase(),
+          password: user.password.trim(),
+        },
+        { merge: true }
+      )
     );
   } catch {
-    // ignore if rules block writes
+    // ignore if Firestore is unavailable or rules block writes
   }
 }
 
@@ -169,7 +230,11 @@ export function subscribeFirestoreConfig(
     COL_CONFIG_DOC,
     (snap) => {
       if (snap.exists()) {
-        onConfig({ ...DEFAULT_CONFIG, ...(snap.data() as Partial<PlatformConfig>) });
+        onConfig({
+          ...DEFAULT_CONFIG,
+          ...(snap.data() as Partial<PlatformConfig>),
+          platformName: FIXED_PLATFORM_NAME,
+        });
       }
     },
     (err) => {
@@ -179,15 +244,18 @@ export function subscribeFirestoreConfig(
 }
 
 export async function updateFirestoreConfig(patch: Partial<PlatformConfig>): Promise<void> {
-  const clean: Record<string, unknown> = {};
-  if (patch.platformName !== undefined) clean.platformName = patch.platformName;
+  const clean: Record<string, unknown> = {
+    platformName: FIXED_PLATFORM_NAME,
+  };
   if (patch.countryCode !== undefined) clean.countryCode = patch.countryCode;
   if (patch.currencyCode !== undefined) clean.currencyCode = patch.currencyCode;
   if (patch.usdRate !== undefined) clean.usdRate = Number(patch.usdRate);
   if (patch.adminPassword !== undefined && patch.adminPassword.trim()) {
     clean.adminPassword = patch.adminPassword.trim();
   }
-  await setDoc(COL_CONFIG_DOC, { ...clean, updatedAt: new Date().toISOString() }, { merge: true });
+  await withTimeout(
+    setDoc(COL_CONFIG_DOC, { ...clean, updatedAt: new Date().toISOString() }, { merge: true })
+  );
 }
 
 export async function createFirestoreUser(payload: {
@@ -197,16 +265,22 @@ export async function createFirestoreUser(payload: {
   username?: string;
   balanceEgp?: number;
   referralCode?: string;
-}): Promise<{ ok: boolean; user?: ManagedUser; error?: string; permissionError?: boolean }> {
-  try {
-    const cleanEmail = payload.email.trim();
-    const emailLower = cleanEmail.toLowerCase();
-    const cleanPass = payload.password.trim();
-    if (!cleanEmail || !cleanPass) {
-      return { ok: false, error: 'البريد الإلكتروني وكلمة المرور مطلوبين' };
-    }
+}): Promise<{
+  ok: boolean;
+  user?: ManagedUser;
+  error?: string;
+  permissionError?: boolean;
+  unavailable?: boolean;
+}> {
+  const cleanEmail = payload.email.trim();
+  const emailLower = cleanEmail.toLowerCase();
+  const cleanPass = payload.password.trim();
+  if (!cleanEmail || !cleanPass) {
+    return { ok: false, error: 'البريد الإلكتروني وكلمة المرور مطلوبين' };
+  }
 
-    const allSnap = await getDocs(COL_USERS);
+  try {
+    const allSnap = await withTimeout(getDocs(COL_USERS));
     const existingUsers = allSnap.docs.map((d) => d.data() as ManagedUser);
     if (existingUsers.some((u) => (u.emailLower || u.email.toLowerCase()) === emailLower)) {
       return { ok: false, error: 'البريد الإلكتروني مسجل من قبل' };
@@ -233,23 +307,23 @@ export async function createFirestoreUser(payload: {
       active: true,
       depositFeePct: 3.0,
       withdrawalFeePct: 1.8,
-      referralCode:
-        payload.referralCode?.trim() ||
-        `EG-${playerId.replace('PL-', '')}`,
+      referralCode: payload.referralCode?.trim() || `EG-${playerId.replace('PL-', '')}`,
       referralRatePct: 0.5,
       twoFactorEnabled: true,
       trc20Address: 'TY9xK8mPq7VwRz4nLp3JdXs2kF9aBc7eW1',
       createdAt: new Date().toISOString(),
     };
 
-    await setDoc(doc(firestoreDb, 'hpay_users', userId), user);
+    await withTimeout(setDoc(doc(firestoreDb, 'hpay_users', userId), user));
     return { ok: true, user };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Firebase error';
+    const info = classifyFirestoreError(err);
     return {
       ok: false,
-      error: msg,
-      permissionError: msg.toLowerCase().includes('permission'),
+      permissionError: info.permissionError,
+      unavailable: info.unavailable,
+      // Only treat non-connection errors as blocking; unavailable/permission falls back cleanly
+      error: info.unavailable ? undefined : info.message,
     };
   }
 }
@@ -271,10 +345,10 @@ export async function loginFirestoreUser(
     }
 
     // Query by emailLower first, and fall back to scanning all users in case emailLower wasn't indexed/set
-    const qSnap = await getDocs(query(COL_USERS, where('emailLower', '==', cleanEmail)));
+    const qSnap = await withTimeout(getDocs(query(COL_USERS, where('emailLower', '==', cleanEmail))));
     let match: ManagedUser | undefined = qSnap.docs.map((d) => d.data() as ManagedUser)[0];
     if (!match) {
-      const allSnap = await getDocs(COL_USERS);
+      const allSnap = await withTimeout(getDocs(COL_USERS));
       match = allSnap.docs
         .map((d) => d.data() as ManagedUser)
         .find((u) => u.email.trim().toLowerCase() === cleanEmail);
@@ -290,9 +364,11 @@ export async function loginFirestoreUser(
       return { ok: false, error: 'الحساب موقوف مؤقتاً من الإدارة' };
     }
 
-    await updateDoc(doc(firestoreDb, 'hpay_users', match.id), {
-      lastSeenAt: new Date().toISOString(),
-    }).catch(() => undefined);
+    withTimeout(
+      updateDoc(doc(firestoreDb, 'hpay_users', match.id), {
+        lastSeenAt: new Date().toISOString(),
+      })
+    ).catch(() => undefined);
 
     return { ok: true, user: match };
   } catch {
@@ -312,11 +388,11 @@ export async function updateFirestoreUser(
   if (typeof patch.password === 'string') {
     clean.password = patch.password.trim();
   }
-  await setDoc(doc(firestoreDb, 'hpay_users', userId), clean, { merge: true });
+  await withTimeout(setDoc(doc(firestoreDb, 'hpay_users', userId), clean, { merge: true }));
 }
 
 export async function deleteFirestoreUser(userId: string): Promise<void> {
-  await deleteDoc(doc(firestoreDb, 'hpay_users', userId));
+  await withTimeout(deleteDoc(doc(firestoreDb, 'hpay_users', userId)));
 }
 
 export async function sendFirestoreWithdrawal(payload: {
@@ -375,10 +451,12 @@ export async function sendFirestoreWithdrawal(payload: {
     receivedAt: nowIso,
   };
 
-  await Promise.all([
-    setDoc(doc(firestoreDb, 'hpay_withdrawals', wdId), wd),
-    setDoc(doc(firestoreDb, 'hpay_messages', msg.id), msg),
-  ]);
+  await withTimeout(
+    Promise.all([
+      setDoc(doc(firestoreDb, 'hpay_withdrawals', wdId), wd),
+      setDoc(doc(firestoreDb, 'hpay_messages', msg.id), msg),
+    ])
+  );
 }
 
 export async function respondFirestoreWithdrawal(payload: {
@@ -390,7 +468,8 @@ export async function respondFirestoreWithdrawal(payload: {
   const userRef = doc(firestoreDb, 'hpay_users', payload.userId);
 
   try {
-    return await runTransaction(firestoreDb, async (tx) => {
+    return await withTimeout(
+      runTransaction(firestoreDb, async (tx) => {
       const msgSnap = await tx.get(msgRef);
       const userSnap = await tx.get(userRef);
       if (!msgSnap.exists() || !userSnap.exists()) {
@@ -438,11 +517,13 @@ export async function respondFirestoreWithdrawal(payload: {
         }
       }
       return { ok: true };
-    });
+      })
+    );
   } catch (err) {
+    const info = classifyFirestoreError(err);
     return {
       ok: false,
-      error: err instanceof Error ? err.message : 'تعذر تنفيذ العملية',
+      error: info.unavailable ? undefined : info.message,
     };
   }
 }
@@ -618,13 +699,19 @@ export async function sendFirestoreInstantDeposit(payload: {
   note?: string;
   usdRate?: number;
   autoCredit?: boolean;
-}): Promise<{ ok: boolean; user?: ManagedUser; deposit?: DepositOrder; error?: string }> {
+}): Promise<{
+  ok: boolean;
+  user?: ManagedUser;
+  deposit?: DepositOrder;
+  error?: string;
+  unavailable?: boolean;
+}> {
   try {
     let targetUserId = payload.userId?.trim() || '';
     if (!targetUserId && payload.identifier?.trim()) {
       const qRaw = payload.identifier.trim().toLowerCase();
       const qNoAt = qRaw.replace(/^@/, '');
-      const allSnap = await getDocs(COL_USERS);
+      const allSnap = await withTimeout(getDocs(COL_USERS));
       const found = allSnap.docs
         .map((d) => d.data() as ManagedUser)
         .find(
@@ -650,7 +737,8 @@ export async function sendFirestoreInstantDeposit(payload: {
     let updatedUser: ManagedUser | undefined;
     let createdDep: DepositOrder | undefined;
 
-    await runTransaction(firestoreDb, async (tx) => {
+    await withTimeout(
+      runTransaction(firestoreDb, async (tx) => {
       const uSnap = await tx.get(userRef);
       if (!uSnap.exists()) {
         throw new Error('حساب العميل مش موجود');
@@ -708,13 +796,16 @@ export async function sendFirestoreInstantDeposit(payload: {
 
       updatedUser = { ...user, balanceEgp: newBalance };
       createdDep = dep;
-    });
+      })
+    );
 
     return { ok: true, user: updatedUser, deposit: createdDep };
   } catch (err) {
+    const info = classifyFirestoreError(err);
     return {
       ok: false,
-      error: err instanceof Error ? err.message : 'تعذر تنفيذ طلب الإيداع',
+      unavailable: info.unavailable,
+      error: info.unavailable ? undefined : info.message,
     };
   }
 }

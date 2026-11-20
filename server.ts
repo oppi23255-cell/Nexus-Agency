@@ -23,6 +23,8 @@ const __dirname = path.dirname(__filename);
 const DATA_DIR = path.join(__dirname, 'data');
 const DB_PATH = path.join(DATA_DIR, 'hpay-db.json');
 
+const FIXED_PLATFORM_NAME = 'Nexus Agency';
+
 function hoursAgo(h: number): string {
   return new Date(Date.now() - h * 3600_000).toISOString();
 }
@@ -34,7 +36,7 @@ function minsFromNow(m: number): string {
 function createSeedState(): PlatformState {
   return {
     config: {
-      platformName: 'egyptpay.trade',
+      platformName: FIXED_PLATFORM_NAME,
       countryCode: 'EG',
       currencyCode: 'EGP',
       usdRate: 49.85,
@@ -244,6 +246,7 @@ function loadDb(): PlatformState {
       fs.writeFileSync(DB_PATH, JSON.stringify(seed, null, 2), 'utf8');
       return seed;
     }
+    parsed.config.platformName = FIXED_PLATFORM_NAME;
     return parsed;
   } catch {
     const seed = createSeedState();
@@ -345,6 +348,7 @@ async function startServer() {
     res.json({
       ok: true,
       userId: user.id,
+      user,
       state: projectStateForUser(db, user.id),
     });
   });
@@ -770,37 +774,45 @@ async function startServer() {
   app.post('/api/admin/users', (req, res) => {
     db = loadDb();
     if (!requireAdmin(req, db)) return res.status(401).json({ ok: false, error: 'Unauthorized' });
-    const { email, password, displayName, username, balanceEgp, referralCode } = req.body as {
-      email: string;
-      password: string;
-      displayName?: string;
-      username?: string;
-      balanceEgp?: number;
-      referralCode?: string;
-    };
+    const { id, playerId: reqPlayerId, uuid, email, password, displayName, username, balanceEgp, referralCode } =
+      req.body as {
+        id?: string;
+        playerId?: string;
+        uuid?: string;
+        email: string;
+        password: string;
+        displayName?: string;
+        username?: string;
+        balanceEgp?: number;
+        referralCode?: string;
+      };
     const cleanEmail = (email || '').trim();
-    if (!cleanEmail || !password) {
+    const cleanPass = (password || '').trim();
+    if (!cleanEmail || !cleanPass) {
       return res.status(400).json({ ok: false, error: 'البريد وكلمة المرور مطلوبين' });
     }
-    if ((db.users ?? []).some((u) => u.email.toLowerCase() === cleanEmail.toLowerCase())) {
+    if ((db.users ?? []).some((u) => u.email.trim().toLowerCase() === cleanEmail.toLowerCase())) {
       return res.status(400).json({ ok: false, error: 'البريد الإلكتروني مسجل من قبل' });
     }
 
     const prefix = cleanEmail.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '') || 'agent';
     const existingPids = new Set((db.users ?? []).map((u) => u.playerId).filter(Boolean));
-    let playerId = `PL-${crypto.randomInt(10000000, 99999999)}`;
-    while (existingPids.has(playerId)) {
+    let playerId =
+      reqPlayerId && reqPlayerId.trim()
+        ? reqPlayerId.trim()
+        : `PL-${crypto.randomInt(10000000, 99999999)}`;
+    while (!reqPlayerId && existingPids.has(playerId)) {
       playerId = `PL-${crypto.randomInt(10000000, 99999999)}`;
     }
     const newUser: ManagedUser = {
-      id: `usr_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`,
+      id: id && id.trim() ? id.trim() : `usr_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`,
       playerId,
-      uuid: crypto.randomUUID(),
+      uuid: uuid && uuid.trim() ? uuid.trim() : crypto.randomUUID(),
       username: (username || `${prefix}_egp`).trim(),
       displayName: (displayName || prefix).trim(),
       email: cleanEmail,
-      emailLower: cleanEmail,
-      password: password.trim(),
+      emailLower: cleanEmail.toLowerCase(),
+      password: cleanPass,
       telegramHandle: `@${prefix}`,
       balanceEgp: Number(balanceEgp) || 0,
       frozenEgp: 0,
@@ -815,7 +827,7 @@ async function startServer() {
       trc20Address: 'TY9xK8mPq7VwRz4nLp3JdXs2kF9aBc7eW1',
       createdAt: new Date().toISOString(),
     };
-    db.users = [...(db.users ?? []), newUser];
+    db.users = [newUser, ...(db.users ?? [])];
     saveDb(db);
     res.json({ ok: true, user: newUser, state: projectAdminState(db) });
   });
@@ -1007,12 +1019,12 @@ async function startServer() {
   app.patch('/api/admin/config', (req, res) => {
     db = loadDb();
     if (!requireAdmin(req, db)) return res.status(401).json({ error: 'Unauthorized' });
-    const { platformName, usdRate, adminPassword } = req.body as {
+    const { usdRate, adminPassword } = req.body as {
       platformName?: string;
       usdRate?: number;
       adminPassword?: string;
     };
-    if (platformName) db.config.platformName = platformName;
+    db.config.platformName = FIXED_PLATFORM_NAME;
     if (usdRate && Number(usdRate) > 0) db.config.usdRate = Number(usdRate);
     if (adminPassword) db.config.adminPassword = adminPassword;
     saveDb(db);
