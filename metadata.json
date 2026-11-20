@@ -1,0 +1,6 @@
+{
+  "name": "HostaPay — منصة الوكلاء والمدفوعات",
+  "description": "منصة متكاملة لإدارة وكلاء الدفع، الإيداعات، السحوبات، وسائل الدفع، والأتمتة الفورية.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

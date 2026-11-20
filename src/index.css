@@ -1,0 +1,101 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --color-accent: #db9d37;
+  --color-app-background: #1b1b1b;
+  --color-app-background-deep: #111111;
+  --color-app-surface: #151515;
+  --color-app-surface-muted: #252525;
+  --color-app-surface-raised: #2b2b2b;
+  --color-app-surface-hover: #202020;
+  --color-app-border: #202020;
+  --color-app-border-soft: #303030;
+  --color-app-border-muted: #333333;
+  --color-app-text-muted: #aaaaaa;
+  --color-app-text-subtle: #a0a0a0;
+  --color-app-text-dim: #737373;
+  --color-app-icon-muted: #909090;
+  --color-app-accent-strong: #e25d0a;
+  --color-app-primary: #1b5ae2;
+  --color-app-primary-hover: #2b68ea;
+  --color-app-table-header: #202021;
+  --color-app-table-row-hover: #202021;
+  --color-app-table-cell-hover: #252526;
+  --color-status-success: #00e344;
+  --color-status-info: #3b82f6;
+  --color-status-danger: #e32200;
+  --color-status-warning: #f4c20d;
+}
+
+:root {
+  --modal-panel-width: 475px;
+  --table-zoom: 1;
+  font-family: "IBM Plex Sans Arabic", "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+body {
+  background-color: #141414;
+  color: #ffffff;
+  overflow: hidden;
+}
+
+.font-mono-num {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Custom Dark Scrollbars matching hpay.today */
+.sidebar-scroll::-webkit-scrollbar,
+.scrollbar-dark::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+.sidebar-scroll::-webkit-scrollbar-track,
+.scrollbar-dark::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-scroll::-webkit-scrollbar-thumb,
+.scrollbar-dark::-webkit-scrollbar-thumb {
+  background: #333333;
+  border-radius: 3px;
+}
+
+.sidebar-scroll::-webkit-scrollbar-thumb:hover,
+.scrollbar-dark::-webkit-scrollbar-thumb:hover {
+  background: #525252;
+}
+
+.sidebar-scroll,
+.scrollbar-dark {
+  scrollbar-width: thin;
+  scrollbar-color: #333333 transparent;
+}
+
+/* Compact tables & zoom support */
+.hpay-table-wrap {
+  font-size: calc(0.84rem * var(--table-zoom, 1));
+}
+
+body.compact-tables .hpay-table th,
+body.compact-tables .hpay-table td {
+  padding-top: 0.45rem;
+  padding-bottom: 0.45rem;
+}
+
+body.mirror-headers .hpay-toolbar {
+  flex-direction: row-reverse;
+}
+
+body.reduce-motion *,
+body.reduce-motion *::before,
+body.reduce-motion *::after {
+  animation-duration: 0.01ms !important;
+  transition-duration: 0.01ms !important;
+}
