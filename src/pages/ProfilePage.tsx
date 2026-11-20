@@ -80,6 +80,24 @@ export function ProfilePage({
           {accountInfoOpen && (
             <div className="px-4 lg:px-6 pb-5 pt-1">
               <div className="flex gap-3 overflow-x-auto scrollbar-dark pb-2">
+                {/* Unique Random Player ID tile */}
+                <div className="shrink-0 min-w-[180px] rounded-[12px] border border-[#e25d0a]/30 bg-[#e25d0a]/[0.07] px-4 py-3.5">
+                  <div className="flex items-center gap-2 text-[12px] text-[#db9d37]">
+                    <span>{lang === 'ar' ? 'ID اللاعب' : 'Player ID'}</span>
+                    <button
+                      type="button"
+                      onClick={() => copyVal(profile.playerId || profile.traderId)}
+                      className="text-[#db9d37] hover:text-white cursor-pointer"
+                      aria-label={t(lang, 'copy')}
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                  <div className="mt-1.5 font-mono-num text-[14px] font-bold text-white">
+                    {profile.playerId || profile.traderId}
+                  </div>
+                </div>
+
                 {/* Account ID tile */}
                 <div className="shrink-0 min-w-[295px] rounded-[12px] border border-[#242424] bg-[#191919] px-4 py-3.5">
                   <div className="flex items-center gap-2 text-[12px] text-[#8a8a8a]">

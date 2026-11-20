@@ -89,7 +89,7 @@ if ($isAuthed && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $password = (string)($_POST['password'] ?? '');
         $displayName = trim((string)($_POST['displayName'] ?? ''));
         $username = trim((string)($_POST['username'] ?? ''));
-        $balanceEgp = (float)($_POST['balanceEgp'] ?? 0);
+        $balanceEgp = 0.0;
 
         if ($email === '' || $password === '') {
             $error = 'البريد الإلكتروني وكلمة المرور مطلوبين';
@@ -312,8 +312,6 @@ $totalBalance = array_reduce($db['users'] ?? [], fn($c, $u) => $c + (float)($u['
         <input type="text" name="displayName" placeholder="الاسم الكامل" />
         <label>اليوزرنيم</label>
         <input type="text" name="username" placeholder="mohamed_egp" />
-        <label>الرصيد الابتدائي (ج.م)</label>
-        <input type="number" step="0.01" name="balanceEgp" value="10000" />
         <button type="submit" class="btn btn-orange" style="margin-top:14px;width:100%;">إنشاء الحساب</button>
       </form>
 

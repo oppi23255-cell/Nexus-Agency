@@ -43,10 +43,12 @@ export interface PlatformConfig {
 
 export interface ManagedUser {
   id: string;
+  playerId: string;
   uuid: string;
   username: string;
   displayName: string;
   email: string;
+  emailLower?: string;
   password: string;
   telegramHandle: string;
   balanceEgp: number;
@@ -67,10 +69,12 @@ export interface ManagedUser {
 export interface OnlinePresenceEntry {
   visitorId: string;
   userId?: string | null;
+  playerId?: string | null;
   userName?: string | null;
   email?: string | null;
   route: string;
   lastPingAt: string;
+  lastPingMs?: number;
 }
 
 export interface AccountDesk {
@@ -250,6 +254,7 @@ export interface ReferralPartner {
 
 export interface UserProfile {
   userId?: string;
+  playerId?: string;
   traderId: string;
   displayName: string;
   email: string;

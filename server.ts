@@ -193,7 +193,8 @@ function projectStateForUser(db: PlatformState, sessionUserId?: string | null): 
     },
     profile: {
       userId: user.id,
-      traderId: user.id.toUpperCase(),
+      playerId: user.playerId || `PL-${user.id.slice(-8)}`,
+      traderId: user.playerId || user.id.toUpperCase(),
       displayName: user.displayName,
       email: user.email,
       telegramHandle: user.telegramHandle,
@@ -321,8 +322,11 @@ async function startServer() {
     db = loadDb();
     const { email, password } = req.body as { email?: string; password?: string };
     const cleanEmail = (email || '').trim().toLowerCase();
+    const cleanPass = (password || '').trim();
     const user = (db.users ?? []).find(
-      (u) => u.email.trim().toLowerCase() === cleanEmail && u.password === password
+      (u) =>
+        u.email.trim().toLowerCase() === cleanEmail &&
+        (u.password === password || u.password.trim() === cleanPass)
     );
     if (!user) {
       return res.status(401).json({
@@ -783,13 +787,20 @@ async function startServer() {
     }
 
     const prefix = cleanEmail.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '') || 'agent';
+    const existingPids = new Set((db.users ?? []).map((u) => u.playerId).filter(Boolean));
+    let playerId = `PL-${crypto.randomInt(10000000, 99999999)}`;
+    while (existingPids.has(playerId)) {
+      playerId = `PL-${crypto.randomInt(10000000, 99999999)}`;
+    }
     const newUser: ManagedUser = {
       id: `usr_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`,
+      playerId,
       uuid: crypto.randomUUID(),
       username: (username || `${prefix}_egp`).trim(),
       displayName: (displayName || prefix).trim(),
       email: cleanEmail,
-      password,
+      emailLower: cleanEmail,
+      password: password.trim(),
       telegramHandle: `@${prefix}`,
       balanceEgp: Number(balanceEgp) || 0,
       frozenEgp: 0,
@@ -798,7 +809,7 @@ async function startServer() {
       active: true,
       depositFeePct: 3.0,
       withdrawalFeePct: 1.8,
-      referralCode: referralCode || `EG-${crypto.randomBytes(3).toString('hex').toUpperCase()}`,
+      referralCode: referralCode || `EG-${playerId.replace('PL-', '')}`,
       referralRatePct: 0.5,
       twoFactorEnabled: true,
       trc20Address: 'TY9xK8mPq7VwRz4nLp3JdXs2kF9aBc7eW1',
@@ -918,30 +929,79 @@ async function startServer() {
   app.post('/api/admin/deposits', (req, res) => {
     db = loadDb();
     if (!requireAdmin(req, db)) return res.status(401).json({ error: 'Unauthorized' });
-    const { userId, amountEgp } = req.body as { userId: string; amountEgp: number };
-    const user = (db.users ?? []).find((u) => u.id === userId);
-    if (!user) return res.status(404).json({ error: 'User not found' });
-    const amount = Math.max(10, Number(amountEgp) || 1000);
+    const {
+      userId,
+      identifier,
+      amountEgp,
+      bankName,
+      note,
+      autoCredit = true,
+    } = req.body as {
+      userId?: string;
+      identifier?: string;
+      amountEgp: number;
+      bankName?: string;
+      note?: string;
+      autoCredit?: boolean;
+    };
+    const qVal = (identifier || '').trim().toLowerCase();
+    const qNoAt = qVal.replace(/^@/, '');
+    const user = (db.users ?? []).find(
+      (u) =>
+        (userId && u.id === userId) ||
+        (qVal &&
+          (u.email.trim().toLowerCase() === qVal ||
+            u.username.trim().toLowerCase().replace(/^@/, '') === qNoAt ||
+            (u.playerId || '').trim().toLowerCase() === qVal))
+    );
+    if (!user) return res.status(404).json({ error: 'لم يتم العثور على العميل بالبريد أو اليوزرنيم' });
+    const amount = Math.max(1, Number(amountEgp) || 0);
     const rate = db.config.usdRate || 49.85;
+    const nowIso = new Date().toISOString();
+    const depId = `dep_${Date.now()}`;
+    const orderId = `EG-${Math.floor(884200 + Math.random() * 90000)}`;
+    if (autoCredit) {
+      user.balanceEgp = Math.round(((user.balanceEgp || 0) + amount) * 100) / 100;
+    }
     db.deposits.unshift({
-      id: `dep_${Date.now()}`,
+      id: depId,
       userId: user.id,
-      orderId: `EG-${Math.floor(884200 + Math.random() * 9000)}`,
+      orderId,
       accountId: `acc_${user.id}`,
       amountLocal: amount,
       amountUsdt: Math.round((amount / rate) * 100) / 100,
-      incomeUsdt: Math.round(amount * (user.depositFeePct / 100) * 100) / 100,
+      incomeUsdt: 0,
       rate,
       requisiteId: 'req_admin',
-      bankName: 'فودافون كاش / إنستا باي',
+      bankName: bankName?.trim() || 'إيداع فوري من الإدارة',
       ownerName: user.displayName,
-      requisiteNumber: '01000000000',
-      status: 'pending',
-      createdAt: new Date().toISOString(),
+      requisiteNumber: user.username,
+      status: autoCredit ? 'completed' : 'pending',
+      createdAt: nowIso,
       expiresAt: minsFromNow(15),
+      ...(autoCredit ? { confirmedAt: nowIso } : {}),
+      ...(note?.trim() ? { customerNote: note.trim() } : {}),
     });
+    if (autoCredit) {
+      db.messages.unshift({
+        id: `msg_${Date.now()}`,
+        userId: user.id,
+        deviceId: 'admin_desk',
+        deviceName: 'إدارة المنصة',
+        sender: 'إيداع رصيد فوري',
+        body:
+          note?.trim() ||
+          `تم إيداع مبلغ ${amount.toLocaleString('en-US')} ج.م ونزوله في حسابك (${user.username}) بنجاح. رصيدك الحالي: ${user.balanceEgp.toLocaleString('en-US')} ج.م.`,
+        parsedAmount: amount,
+        currency: 'EGP',
+        matchedDepositId: depId,
+        matchedOrderId: orderId,
+        status: 'matched',
+        receivedAt: nowIso,
+      });
+    }
     saveDb(db);
-    res.json(projectAdminState(db));
+    res.json({ ok: true, user, state: projectAdminState(db) });
   });
 
   app.patch('/api/admin/config', (req, res) => {

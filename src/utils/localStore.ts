@@ -96,7 +96,7 @@ function prunePresence(list: OnlinePresenceEntry[] = []): OnlinePresenceEntry[] 
   });
 }
 
-function buildAccountForUser(user: ManagedUser, rate: number): AccountDesk {
+export function buildAccountForUser(user: ManagedUser, rate: number): AccountDesk {
   return {
     account_id: `acc_${user.id}`,
     userId: user.id,
@@ -116,6 +116,34 @@ function buildAccountForUser(user: ManagedUser, rate: number): AccountDesk {
   };
 }
 
+export function buildPlatformStateForUser(
+  base: PlatformState,
+  user: ManagedUser
+): PlatformState {
+  const acc = buildAccountForUser(user, base.config.usdRate);
+  return {
+    ...base,
+    authenticated: true,
+    activeUserId: user.id,
+    users: undefined,
+    onlinePresence: undefined,
+    profile: {
+      userId: user.id,
+      playerId: user.playerId || `PL-${user.id.slice(-8)}`,
+      traderId: user.playerId || user.id.toUpperCase(),
+      displayName: user.displayName,
+      email: user.email,
+      telegramHandle: user.telegramHandle,
+      twoFactorEnabled: user.twoFactorEnabled,
+      referralCode: user.referralCode,
+      referralRatePct: user.referralRatePct,
+      trc20Address: user.trc20Address,
+    },
+    currentAccountId: acc.account_id,
+    accounts: [acc],
+  };
+}
+
 function projectUserView(db: PlatformState, userId?: string | null): PlatformState {
   db.onlinePresence = prunePresence(db.onlinePresence);
   const users = db.users ?? [];
@@ -132,25 +160,8 @@ function projectUserView(db: PlatformState, userId?: string | null): PlatformSta
   }
   const acc = buildAccountForUser(user, db.config.usdRate);
   return {
-    ...db,
-    authenticated: true,
-    activeUserId: user.id,
-    users: undefined,
-    onlinePresence: undefined,
+    ...buildPlatformStateForUser(db, user),
     onlineCount: db.onlinePresence.length,
-    profile: {
-      userId: user.id,
-      traderId: user.id.toUpperCase(),
-      displayName: user.displayName,
-      email: user.email,
-      telegramHandle: user.telegramHandle,
-      twoFactorEnabled: user.twoFactorEnabled,
-      referralCode: user.referralCode,
-      referralRatePct: user.referralRatePct,
-      trc20Address: user.trc20Address,
-    },
-    currentAccountId: acc.account_id,
-    accounts: [acc],
     requisites: db.requisites.filter((r) => r.userId === user.id || r.accountId === acc.account_id),
     deposits: db.deposits.filter((d) => d.userId === user.id || d.accountId === acc.account_id),
     disputes: db.disputes.filter((d) => d.userId === user.id || d.accountId === acc.account_id),
@@ -230,8 +241,11 @@ export function executeLocalApi(
   if (url === '/api/auth/login' && body) {
     const email = String(body.email || '').trim().toLowerCase();
     const password = String(body.password || '');
+    const cleanPass = password.trim();
     const user = (db.users ?? []).find(
-      (u) => u.email.trim().toLowerCase() === email && u.password === password
+      (u) =>
+        u.email.trim().toLowerCase() === email &&
+        (u.password === password || u.password.trim() === cleanPass)
     );
     if (!user) {
       return { ok: false, error: 'البريد الإلكتروني أو كلمة المرور غير صحيحة' };
@@ -269,13 +283,20 @@ export function executeLocalApi(
       return { ok: false, error: 'البريد الإلكتروني مسجل من قبل' };
     }
     const prefix = email.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '') || 'agent';
+    const takenPids = new Set((db.users ?? []).map((u) => u.playerId).filter(Boolean));
+    let playerId = `PL-${Math.floor(10000000 + Math.random() * 89999999)}`;
+    while (takenPids.has(playerId)) {
+      playerId = `PL-${Math.floor(10000000 + Math.random() * 89999999)}`;
+    }
     const newUser: ManagedUser = {
       id: `usr_${Date.now()}`,
+      playerId,
       uuid: `01a1a848-${Math.random().toString(16).slice(2, 6)}-7533-a6f9-${Math.random().toString(16).slice(2, 14)}`,
       username: String(body.username || `${prefix}_egp`),
       displayName: String(body.displayName || prefix),
       email,
-      password,
+      emailLower: email.toLowerCase(),
+      password: password.trim(),
       telegramHandle: `@${prefix}`,
       balanceEgp: Number(body.balanceEgp) || 0,
       frozenEgp: 0,
@@ -284,7 +305,7 @@ export function executeLocalApi(
       active: true,
       depositFeePct: 3.0,
       withdrawalFeePct: 1.8,
-      referralCode: String(body.referralCode || `EG-${Math.random().toString(36).slice(2, 8).toUpperCase()}`),
+      referralCode: String(body.referralCode || `EG-${playerId.replace('PL-', '')}`),
       referralRatePct: 0.5,
       twoFactorEnabled: true,
       trc20Address: 'TY9xK8mPq7VwRz4nLp3JdXs2kF9aBc7eW1',
@@ -387,31 +408,69 @@ export function executeLocalApi(
   }
 
   if (url === '/api/admin/deposits' && body) {
-    const targetId = String(body.userId || '');
-    const user = (db.users ?? []).find((u) => u.id === targetId);
-    if (user) {
-      const amount = Math.max(10, Number(body.amountEgp) || 1000);
-      const rate = db.config.usdRate || 49.85;
-      db.deposits.unshift({
-        id: `dep_${Date.now()}`,
-        userId: user.id,
-        orderId: `EG-${Math.floor(884200 + Math.random() * 9000)}`,
-        accountId: `acc_${user.id}`,
-        amountLocal: amount,
-        amountUsdt: Math.round((amount / rate) * 100) / 100,
-        incomeUsdt: Math.round(amount * (user.depositFeePct / 100) * 100) / 100,
-        rate,
-        requisiteId: 'req_admin',
-        bankName: 'فودافون كاش / إنستا باي',
-        ownerName: user.displayName,
-        requisiteNumber: '01000000000',
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-        expiresAt: minsFromNow(15),
-      });
-      saveLocalState(db);
+    const targetId = String(body.userId || '').trim();
+    const qVal = String(body.identifier || '').trim().toLowerCase();
+    const qNoAt = qVal.replace(/^@/, '');
+    const user = (db.users ?? []).find(
+      (u) =>
+        (targetId && u.id === targetId) ||
+        (qVal &&
+          (u.email.trim().toLowerCase() === qVal ||
+            u.username.trim().toLowerCase().replace(/^@/, '') === qNoAt ||
+            (u.playerId || '').trim().toLowerCase() === qVal))
+    );
+    if (!user) {
+      return { ok: false, error: 'لم يتم العثور على العميل بالبريد أو اليوزرنيم ده' };
     }
-    return { ok: true, state: { ...db, onlineCount: prunePresence(db.onlinePresence).length } };
+    const autoCredit = body.autoCredit !== false;
+    const amount = Math.max(1, Number(body.amountEgp) || 0);
+    const rate = db.config.usdRate || 49.85;
+    const nowIso = new Date().toISOString();
+    const depId = `dep_${Date.now()}`;
+    const orderId = `EG-${Math.floor(884200 + Math.random() * 90000)}`;
+    if (autoCredit) {
+      user.balanceEgp = Math.round(((user.balanceEgp || 0) + amount) * 100) / 100;
+    }
+    db.deposits.unshift({
+      id: depId,
+      userId: user.id,
+      orderId,
+      accountId: `acc_${user.id}`,
+      amountLocal: amount,
+      amountUsdt: Math.round((amount / rate) * 100) / 100,
+      incomeUsdt: 0,
+      rate,
+      requisiteId: 'req_admin',
+      bankName: typeof body.bankName === 'string' && body.bankName.trim() ? body.bankName.trim() : 'إيداع فوري من الإدارة',
+      ownerName: user.displayName,
+      requisiteNumber: user.username,
+      status: autoCredit ? 'completed' : 'pending',
+      createdAt: nowIso,
+      expiresAt: minsFromNow(15),
+      ...(autoCredit ? { confirmedAt: nowIso } : {}),
+      ...(typeof body.note === 'string' && body.note.trim() ? { customerNote: body.note.trim() } : {}),
+    });
+    if (autoCredit) {
+      db.messages.unshift({
+        id: `msg_${Date.now()}`,
+        userId: user.id,
+        deviceId: 'admin_desk',
+        deviceName: 'إدارة المنصة',
+        sender: 'إيداع رصيد فوري',
+        body:
+          typeof body.note === 'string' && body.note.trim()
+            ? body.note.trim()
+            : `تم إيداع مبلغ ${amount.toLocaleString('en-US')} ج.م ونزوله في حسابك (${user.username}) بنجاح. رصيدك الحالي: ${user.balanceEgp.toLocaleString('en-US')} ج.م.`,
+        parsedAmount: amount,
+        currency: 'EGP',
+        matchedDepositId: depId,
+        matchedOrderId: orderId,
+        status: 'matched',
+        receivedAt: nowIso,
+      });
+    }
+    saveLocalState(db);
+    return { ok: true, user, state: { ...db, onlineCount: prunePresence(db.onlinePresence).length } };
   }
 
   if (url === '/api/admin/config' && body) {
