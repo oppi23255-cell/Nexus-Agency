@@ -35,25 +35,25 @@ export function StatisticsPage({
   const stats = useMemo(() => {
     const completedDeps = accDeposits.filter((d) => d.status === 'completed');
     const completedWds = accWithdrawals.filter((w) => w.status === 'completed');
-    const mult = period === 'today' ? 1 : period === '7d' ? 6.4 : period === '30d' ? 24.5 : 68;
-
-    const depVolUsdt =
-      completedDeps.reduce((acc, d) => acc + d.amountUsdt, 0) + 1240 * mult;
-    const wdVolUsdt =
-      completedWds.reduce((acc, w) => acc + w.amountUsdt, 0) + 780 * mult;
-    const profitUsdt =
+    const depVolLocal = completedDeps.reduce((acc, d) => acc + d.amountLocal, 0);
+    const wdVolLocal = completedWds.reduce((acc, w) => acc + w.amountLocal, 0);
+    const profitLocal =
       completedDeps.reduce((acc, d) => acc + d.incomeUsdt, 0) +
-      completedWds.reduce((acc, w) => acc + w.incomeUsdt, 0) +
-      52.4 * mult;
+      completedWds.reduce((acc, w) => acc + w.incomeUsdt, 0);
 
-    const totalOrders = accDeposits.length || 1;
-    const conversion = Math.min(
-      99.4,
-      Math.round(((completedDeps.length + 18) / (totalOrders + 19)) * 1000) / 10
-    );
+    const totalOrders = accDeposits.length;
+    const conversion =
+      totalOrders > 0
+        ? Math.round((completedDeps.length / totalOrders) * 1000) / 10
+        : 0;
 
-    return { depVolUsdt, wdVolUsdt, profitUsdt, conversion };
-  }, [accDeposits, accWithdrawals, period]);
+    return {
+      depVolUsdt: depVolLocal,
+      wdVolUsdt: wdVolLocal,
+      profitUsdt: profitLocal,
+      conversion,
+    };
+  }, [accDeposits, accWithdrawals]);
 
   const series = useMemo(() => {
     const days =
@@ -120,11 +120,11 @@ export function StatisticsPage({
 
       {/* KPI Strip */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
-        <KpiBox label={t(lang, 'totalDepositVol')} value={`${formatNumber(stats.depVolUsdt)} USDT`} accent="text-white" />
-        <KpiBox label={t(lang, 'totalWithdrawalVol')} value={`${formatNumber(stats.wdVolUsdt)} USDT`} accent="text-[#3b82f6]" />
-        <KpiBox label={t(lang, 'netProfit')} value={`+${formatNumber(stats.profitUsdt)} USDT`} accent="text-[#00e344]" />
+        <KpiBox label={t(lang, 'totalDepositVol')} value={`${formatNumber(stats.depVolUsdt)} ${t(lang, 'currencyShort')}`} accent="text-white" />
+        <KpiBox label={t(lang, 'totalWithdrawalVol')} value={`${formatNumber(stats.wdVolUsdt)} ${t(lang, 'currencyShort')}`} accent="text-[#3b82f6]" />
+        <KpiBox label={t(lang, 'netProfit')} value={`+${formatNumber(stats.profitUsdt)} ${t(lang, 'currencyShort')}`} accent="text-[#00e344]" />
         <KpiBox label={t(lang, 'conversionRate')} value={`${stats.conversion}%`} accent="text-[#db9d37]" />
-        <KpiBox label={t(lang, 'avgConfirmTime')} value="42 sec" accent="text-[#e25d0a]" />
+        <KpiBox label={t(lang, 'avgConfirmTime')} value={lang === 'ar' ? '42 ثانية' : '42 sec'} accent="text-[#e25d0a]" />
       </div>
 
       {/* Bar Chart Card */}
@@ -132,7 +132,7 @@ export function StatisticsPage({
         <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
           <div>
             <h2 className="text-[15px] font-semibold text-white">
-              {lang === 'ar' ? 'حجم العمليات (USDT)' : 'Processing Volume (USDT)'}
+              {lang === 'ar' ? 'حجم العمليات (جنيه مصري)' : 'Processing Volume (EGP)'}
             </h2>
             <p className="text-[12px] text-[#737373]">
               {lang === 'ar' ? 'مقارنة حجم الإيداعات والسحوبات المنفذة' : 'Completed deposits vs withdrawals comparison'}
@@ -163,8 +163,8 @@ export function StatisticsPage({
               >
                 {hoverDay === idx && (
                   <div className="absolute -top-2 z-10 whitespace-nowrap rounded-lg border border-[#333333] bg-[#202020] px-2.5 py-1.5 text-[11px] font-mono-num text-white shadow-lg">
-                    <div>+{formatMoney(item.depositsVal)} USDT</div>
-                    <div className="text-[#3b82f6]">-{formatMoney(item.withdrawalsVal)} USDT</div>
+                    <div>+{formatMoney(item.depositsVal)} {t(lang, 'currencyShort')}</div>
+                    <div className="text-[#3b82f6]">-{formatMoney(item.withdrawalsVal)} {t(lang, 'currencyShort')}</div>
                   </div>
                 )}
                 <div className="w-full max-w-[54px] flex items-end justify-center gap-1.5 h-full">
@@ -209,7 +209,7 @@ export function StatisticsPage({
                     {formatMoney(m.volumeLocal)} / {formatMoney(m.limitLocal)} {currentAccount.currency}
                   </td>
                   <td className="py-3 px-4 font-mono-num text-[#db9d37]">{m.bidRate}%</td>
-                  <td className="py-3 px-4 font-mono-num text-[#00e344]">+{formatNumber(m.earnedUsdt)} USDT</td>
+                  <td className="py-3 px-4 font-mono-num text-[#00e344]">+{formatNumber(m.earnedUsdt)} {t(lang, 'currencyShort')}</td>
                 </tr>
               ))}
             </tbody>

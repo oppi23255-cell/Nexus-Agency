@@ -1,15 +1,19 @@
 import React from 'react';
-import { HostapayMark } from './HpayIcons';
+import { CountryFlagBadge, HostapayMark } from './HpayIcons';
 
 export function AuthBootLoader({
   phase,
   error,
   lang = 'ar',
+  platformName = 'egyptpay.trade',
+  countryCode = 'EG',
   onRetry,
 }: {
   phase: 'preparing' | 'accounts';
   error?: string | null;
   lang?: 'ar' | 'en';
+  platformName?: string;
+  countryCode?: 'SA' | 'EG' | 'AE' | 'KG';
   onRetry?: () => void;
 }) {
   const isAr = lang === 'ar';
@@ -20,6 +24,12 @@ export function AuthBootLoader({
       className="grid min-h-dvh w-full place-items-center bg-[#141414] px-6 text-white select-none"
     >
       <div className="w-full max-w-[420px] rounded-[24px] border border-[#222222] bg-[#151515] p-7 text-center shadow-[0_24px_60px_rgba(0,0,0,0.55)]">
+        {/* Brand pill */}
+        <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-[#252525] bg-[#1a1a1a] px-3 py-1 text-[12px] font-semibold text-[#d4d4d4]">
+          <CountryFlagBadge code={countryCode} />
+          <span className="tracking-tight">{platformName}</span>
+        </div>
+
         {/* Emblem + smooth orange orbital spinner */}
         <div className="mx-auto mb-5 relative flex h-16 w-16 items-center justify-center">
           <div className="absolute inset-0 rounded-2xl border border-[#2a2a2a] bg-[#1b1b1b]" />
@@ -34,11 +44,11 @@ export function AuthBootLoader({
         <div className="mt-2.5 text-[13.5px] text-[#a0a0a0]">
           {phase === 'preparing'
             ? isAr
-              ? 'جاري التحقق وتجهيز الجلسة…'
+              ? 'جاري تجهيز بوابة الدخول والتحقق من الجلسة…'
               : 'Preparing authorization redirect…'
             : isAr
-            ? 'جاري تحميل حسابات التداول…'
-            : 'Loading accounts…'}
+            ? 'جاري تحميل بيانات الحساب…'
+            : 'Loading account desk…'}
         </div>
 
         {/* Subtle progress bar */}

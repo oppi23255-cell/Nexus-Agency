@@ -26,6 +26,8 @@ export function statusToTone(status: string): BadgeTone {
     case 'accepted':
     case 'confirming':
       return 'warning';
+    case 'awaiting_confirmation':
+      return 'accent';
     case 'disputed':
     case 'open':
     case 'cancelled':

@@ -19,26 +19,34 @@ export function HostapayMark({ className = 'w-5 h-5' }: { className?: string }) 
   );
 }
 
-export function CountryFlagBadge({ code }: { code: 'SA' | 'EG' | 'AE' | 'KG' }) {
+export function CountryFlagBadge({ code = 'EG' }: { code?: 'SA' | 'EG' | 'AE' | 'KG' }) {
+  if (code === 'EG') {
+    return (
+      <span
+        title="مصر · EG"
+        className="relative inline-flex h-[18px] w-[26px] overflow-hidden rounded-[3.5px] border border-white/15 flex-col shrink-0 shadow-sm"
+      >
+        <span className="h-1/3 w-full bg-[#ce1126]" />
+        <span className="h-1/3 w-full bg-white flex items-center justify-center">
+          {/* Golden Eagle of Saladin simplified crest */}
+          <svg viewBox="0 0 12 10" className="h-[5px] w-[6px]" aria-hidden="true">
+            <path
+              d="M6 0.8L7.2 2.4L10.5 2.4L9.2 4.8L8.1 4.4L7.7 7.8L6.6 9.2H5.4L4.3 7.8L3.9 4.4L2.8 4.8L1.5 2.4L4.8 2.4L6 0.8Z"
+              fill="#c09300"
+            />
+          </svg>
+        </span>
+        <span className="h-1/3 w-full bg-[#111111]" />
+      </span>
+    );
+  }
   if (code === 'SA') {
     return (
       <span
         title="SA"
-        className="inline-flex h-4 w-6 items-center justify-center rounded-[3px] bg-[#006c35] text-[8.5px] font-bold tracking-tight text-white border border-white/10 shrink-0"
+        className="inline-flex h-[18px] w-[26px] items-center justify-center rounded-[3.5px] bg-[#006c35] text-[8.5px] font-bold tracking-tight text-white border border-white/10 shrink-0"
       >
         SA
-      </span>
-    );
-  }
-  if (code === 'EG') {
-    return (
-      <span
-        title="EG"
-        className="inline-flex h-4 w-6 overflow-hidden rounded-[3px] border border-white/10 flex-col shrink-0"
-      >
-        <span className="h-1/3 w-full bg-[#ce1126]" />
-        <span className="h-1/3 w-full bg-white" />
-        <span className="h-1/3 w-full bg-[#111111]" />
       </span>
     );
   }
@@ -46,7 +54,7 @@ export function CountryFlagBadge({ code }: { code: 'SA' | 'EG' | 'AE' | 'KG' }) 
     return (
       <span
         title="AE"
-        className="inline-flex h-4 w-6 overflow-hidden rounded-[3px] border border-white/10 shrink-0"
+        className="inline-flex h-[18px] w-[26px] overflow-hidden rounded-[3.5px] border border-white/10 shrink-0"
       >
         <span className="w-1.5 h-full bg-[#ff0000]" />
         <span className="flex-1 flex flex-col">
@@ -60,7 +68,7 @@ export function CountryFlagBadge({ code }: { code: 'SA' | 'EG' | 'AE' | 'KG' }) 
   return (
     <span
       title="KG"
-      className="inline-flex h-4 w-6 items-center justify-center rounded-[3px] bg-[#e8112d] text-[8.5px] font-bold text-[#ffef00] border border-white/10 shrink-0"
+      className="inline-flex h-[18px] w-[26px] items-center justify-center rounded-[3.5px] bg-[#e8112d] text-[8.5px] font-bold text-[#ffef00] border border-white/10 shrink-0"
     >
       KG
     </span>
@@ -69,19 +77,21 @@ export function CountryFlagBadge({ code }: { code: 'SA' | 'EG' | 'AE' | 'KG' }) 
 
 export function HostapayLogo({
   collapsed = false,
-  countryCode = 'SA',
+  countryCode = 'EG',
+  platformName = 'egyptpay.trade',
 }: {
   collapsed?: boolean;
   countryCode?: 'SA' | 'EG' | 'AE' | 'KG';
+  platformName?: string;
 }) {
   if (collapsed) {
     return <HostapayMark className="w-5 h-5 text-white shrink-0" />;
   }
 
   return (
-    <div className="flex items-center gap-2.5 select-none">
-      <span className="text-[19px] font-bold tracking-[-0.025em] text-white leading-none whitespace-nowrap">
-        hostapay.trade
+    <div className="flex items-center gap-2.5 select-none min-w-0">
+      <span className="text-[18px] font-bold tracking-[-0.025em] text-white leading-none whitespace-nowrap truncate">
+        {platformName}
       </span>
       <CountryFlagBadge code={countryCode} />
     </div>

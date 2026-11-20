@@ -12,11 +12,18 @@ export type RoutePath =
   | '/automatic/api'
   | '/messages'
   | '/profile'
-  | '/referrals';
+  | '/referrals'
+  | '/admin.php';
 
 export type DepositStatus = 'pending' | 'completed' | 'disputed' | 'cancelled' | 'expired';
 export type DisputeStatus = 'open' | 'reviewing' | 'resolved_approve' | 'resolved_reject';
-export type WithdrawalStatus = 'available' | 'accepted' | 'completed' | 'cancelled' | 'expired';
+export type WithdrawalStatus =
+  | 'available'
+  | 'accepted'
+  | 'awaiting_confirmation'
+  | 'completed'
+  | 'cancelled'
+  | 'expired';
 export type RequisiteType = 'card' | 'wallet' | 'iban' | 'instapay';
 export type NotificationPosition =
   | 'top-right'
@@ -26,18 +33,59 @@ export type NotificationPosition =
   | 'bottom-left'
   | 'bottom-center';
 
+export interface PlatformConfig {
+  platformName: string;
+  countryCode: 'EG' | 'SA' | 'AE' | 'KG';
+  currencyCode: 'EGP' | 'SAR' | 'AED' | 'KGS';
+  usdRate: number;
+  adminPassword: string;
+}
+
+export interface ManagedUser {
+  id: string;
+  uuid: string;
+  username: string;
+  displayName: string;
+  email: string;
+  password: string;
+  telegramHandle: string;
+  balanceEgp: number;
+  frozenEgp: number;
+  insuranceEgp: number | null;
+  canTrade: boolean;
+  active: boolean;
+  depositFeePct: number;
+  withdrawalFeePct: number;
+  referralCode: string;
+  referralRatePct: number;
+  twoFactorEnabled: boolean;
+  trc20Address: string;
+  createdAt: string;
+  lastSeenAt?: string;
+}
+
+export interface OnlinePresenceEntry {
+  visitorId: string;
+  userId?: string | null;
+  userName?: string | null;
+  email?: string | null;
+  route: string;
+  lastPingAt: string;
+}
+
 export interface AccountDesk {
   account_id: string;
+  userId?: string;
   uuid: string;
   username: string;
   countryCode: 'SA' | 'EG' | 'AE' | 'KG';
   label: string;
   labelEn: string;
   currency: 'EGP' | 'SAR' | 'KGS' | 'AED';
-  balanceUsdt: number;
+  balanceUsdt: number; // Stores active desk balance in EGP for Egyptian desk
   frozenUsdt: number;
   insuranceAmount: number | null;
-  rate: number; // 1 USD = X local currency
+  rate: number; // 1 USD = X EGP
   canTrade: boolean;
   depositFeePct: number;
   withdrawalFeePct: number;
@@ -45,6 +93,7 @@ export interface AccountDesk {
 
 export interface Requisite {
   id: string;
+  userId?: string;
   accountId: string;
   bankName: string;
   ownerName: string;
@@ -62,6 +111,7 @@ export interface Requisite {
 
 export interface DepositOrder {
   id: string;
+  userId?: string;
   orderId: string;
   accountId: string;
   amountLocal: number;
@@ -81,6 +131,7 @@ export interface DepositOrder {
 
 export interface DisputeItem {
   id: string;
+  userId?: string;
   depositId: string;
   orderId: string;
   accountId: string;
@@ -99,6 +150,7 @@ export interface DisputeItem {
 
 export interface WithdrawalOrder {
   id: string;
+  userId?: string;
   orderId: string;
   accountId: string;
   amountLocal: number;
@@ -113,11 +165,13 @@ export interface WithdrawalOrder {
   expiresAt: string;
   acceptedAt?: string;
   completedAt?: string;
+  adminCreated?: boolean;
   receiptFiles: Array<{ name: string; size: string; uploadedAt: string }>;
 }
 
 export interface AndroidDevice {
   id: string;
+  userId?: string;
   name: string;
   model: string;
   osVersion: string;
@@ -132,6 +186,7 @@ export interface AndroidDevice {
 
 export interface TelegramBotConfig {
   id: string;
+  userId?: string;
   name: string;
   botUsername: string;
   chatId: string;
@@ -142,6 +197,7 @@ export interface TelegramBotConfig {
 
 export interface ApiKeyConfig {
   id: string;
+  userId?: string;
   label: string;
   keyPrefix: string;
   fullKey: string;
@@ -154,6 +210,7 @@ export interface ApiKeyConfig {
 
 export interface SmsMessage {
   id: string;
+  userId?: string;
   deviceId: string;
   deviceName: string;
   sender: string;
@@ -162,12 +219,18 @@ export interface SmsMessage {
   currency: string;
   matchedDepositId: string | null;
   matchedOrderId: string | null;
+  withdrawalId?: string | null;
+  withdrawalAmountEgp?: number;
+  withdrawalDestination?: string;
+  withdrawalRecipient?: string;
+  withdrawalActionStatus?: 'pending_confirmation' | 'confirmed' | 'rejected';
   status: 'matched' | 'unmatched' | 'ignored';
   receivedAt: string;
 }
 
 export interface TopUpRecord {
   id: string;
+  userId?: string;
   txHash: string;
   network: 'TRC-20' | 'BEP-20' | 'TON';
   amountUsdt: number;
@@ -177,6 +240,7 @@ export interface TopUpRecord {
 
 export interface ReferralPartner {
   id: string;
+  userId?: string;
   partnerCode: string;
   joinedAt: string;
   volumeUsdt: number;
@@ -185,6 +249,7 @@ export interface ReferralPartner {
 }
 
 export interface UserProfile {
+  userId?: string;
   traderId: string;
   displayName: string;
   email: string;
@@ -213,6 +278,12 @@ export interface AppSettings {
 }
 
 export interface PlatformState {
+  config: PlatformConfig;
+  authenticated?: boolean;
+  activeUserId?: string | null;
+  users?: ManagedUser[];
+  onlinePresence?: OnlinePresenceEntry[];
+  onlineCount?: number;
   profile: UserProfile;
   currentAccountId: string;
   accounts: AccountDesk[];

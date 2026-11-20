@@ -17,9 +17,14 @@ export function ReferralsPage({
   onNotify: (type: 'success' | 'error' | 'warning', title: string, message?: string) => void;
 }) {
   const lang = settings.lang;
-  const referralUrl = `https://hpay.today/r/${profile.referralCode}`;
+  const origin =
+    typeof window !== 'undefined' && window.location?.origin
+      ? window.location.origin
+      : '';
+  const referralUrl = `${origin}/r/${profile.referralCode}`;
   const totalEarned = referrals.reduce((sum, r) => sum + r.earnedUsdt, 0);
   const totalVolume = referrals.reduce((sum, r) => sum + r.volumeUsdt, 0);
+  const currLabel = t(lang, 'currencyShort');
 
   const copyLink = async (val: string) => {
     try {
@@ -39,7 +44,10 @@ export function ReferralsPage({
             <span>{t(lang, 'referralLink')}</span>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <div className="flex-1 min-w-[200px] rounded-[10px] border border-[#303030] bg-[#1b1b1b] px-3.5 py-2.5 font-mono-num text-[13px] text-white truncate">
+            <div
+              dir="ltr"
+              className="flex-1 min-w-[200px] rounded-[10px] border border-[#303030] bg-[#1b1b1b] px-3.5 py-2.5 font-mono-num text-[13px] text-white truncate text-start"
+            >
               {referralUrl}
             </div>
             <button
@@ -56,10 +64,10 @@ export function ReferralsPage({
         <div className="rounded-[12px] border border-[#252525] bg-[#151515] p-5 flex flex-col justify-between">
           <div className="text-[12px] text-[#737373]">{t(lang, 'referralCommission')}</div>
           <div className="text-[24px] font-bold font-mono-num text-[#00e344]">
-            +{formatNumber(totalEarned)} USDT
+            +{formatNumber(totalEarned)} {currLabel}
           </div>
           <div className="text-[12px] text-[#aaaaaa] font-mono-num">
-            {profile.referralRatePct}% · {formatMoney(totalVolume)} USDT vol
+            {profile.referralRatePct}% · {formatMoney(totalVolume)} {currLabel}
           </div>
         </div>
       </div>
@@ -72,29 +80,39 @@ export function ReferralsPage({
           <table className="w-full border-collapse text-start text-[13px]">
             <thead className="bg-[#202021] text-[12px] text-[#a0a0a0]">
               <tr>
-                <th className="py-2.5 px-4 text-start">{lang === 'ar' ? 'رمز الوكيل' : 'Partner Code'}</th>
-                <th className="py-2.5 px-4 text-start">{lang === 'ar' ? 'حجم التداول' : 'Volume (USDT)'}</th>
-                <th className="py-2.5 px-4 text-start">{lang === 'ar' ? 'أرباحك' : 'Earned (USDT)'}</th>
+                <th className="py-2.5 px-4 text-start">{lang === 'ar' ? 'كود الوكيل' : 'Partner Code'}</th>
+                <th className="py-2.5 px-4 text-start">{lang === 'ar' ? `حجم الشغل (${currLabel})` : 'Volume (EGP)'}</th>
+                <th className="py-2.5 px-4 text-start">{lang === 'ar' ? `أرباحك (${currLabel})` : 'Earned (EGP)'}</th>
                 <th className="py-2.5 px-4 text-start">{t(lang, 'status')}</th>
                 <th className="py-2.5 px-4 text-start">{t(lang, 'date')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#202020]">
-              {referrals.map((r) => (
-                <tr key={r.id} className="hover:bg-[#202021]">
-                  <td className="py-3 px-4 font-mono-num font-semibold text-white">{r.partnerCode}</td>
-                  <td className="py-3 px-4 font-mono-num text-[#aaaaaa]">{formatMoney(r.volumeUsdt)} USDT</td>
-                  <td className="py-3 px-4 font-mono-num font-semibold text-[#00e344]">
-                    +{formatNumber(r.earnedUsdt)} USDT
-                  </td>
-                  <td className="py-3 px-4">
-                    <StatusBadge status={r.status} lang={lang} />
-                  </td>
-                  <td className="py-3 px-4 font-mono-num text-[12px] text-[#737373]">
-                    {formatDateTime(r.joinedAt, settings)}
+              {referrals.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="py-8 text-center text-[#737373]">
+                    {t(lang, 'nothingFound')}
                   </td>
                 </tr>
-              ))}
+              ) : (
+                referrals.map((r) => (
+                  <tr key={r.id} className="hover:bg-[#202021]">
+                    <td className="py-3 px-4 font-mono-num font-semibold text-white">{r.partnerCode}</td>
+                    <td className="py-3 px-4 font-mono-num text-[#aaaaaa]">
+                      {formatMoney(r.volumeUsdt)} {currLabel}
+                    </td>
+                    <td className="py-3 px-4 font-mono-num font-semibold text-[#00e344]">
+                      +{formatNumber(r.earnedUsdt)} {currLabel}
+                    </td>
+                    <td className="py-3 px-4">
+                      <StatusBadge status={r.status} lang={lang} />
+                    </td>
+                    <td className="py-3 px-4 font-mono-num text-[12px] text-[#737373]">
+                      {formatDateTime(r.joinedAt, settings)}
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>

@@ -17,6 +17,7 @@ import { HostapayLogo } from './HpayIcons';
 
 interface TopHeaderProps {
   lang: Language;
+  platformName: string;
   currentRoute: RoutePath;
   currentAccount: AccountDesk;
   sidebarCollapsed: boolean;
@@ -80,10 +81,15 @@ const ROUTE_META: Record<RoutePath, { parent?: TranslationKey; title: Translatio
     title: 'referrals',
     icon: <Users className="h-[18px] w-[18px] text-white" />,
   },
+  '/admin.php': {
+    title: 'profile',
+    icon: <Settings className="h-[18px] w-[18px] text-[#e25d0a]" />,
+  },
 };
 
 export function TopHeader({
   lang,
+  platformName,
   currentRoute,
   currentAccount,
   sidebarCollapsed,
@@ -91,6 +97,7 @@ export function TopHeader({
   onOpenSettings,
 }: TopHeaderProps) {
   const meta = ROUTE_META[currentRoute] ?? ROUTE_META['/deposits'];
+  const currLabel = lang === 'ar' && currentAccount.currency === 'EGP' ? 'ج.م' : currentAccount.currency;
 
   return (
     <header className="fixed top-0 inset-x-0 z-40 h-[3.75rem] bg-[#141414] border-b border-[#202020] flex items-center">
@@ -100,7 +107,11 @@ export function TopHeader({
           sidebarCollapsed ? 'w-[4rem] justify-center px-0' : 'w-[20rem] px-5 justify-between'
         }`}
       >
-        <HostapayLogo collapsed={sidebarCollapsed} countryCode={currentAccount.countryCode} />
+        <HostapayLogo
+          collapsed={sidebarCollapsed}
+          countryCode={currentAccount.countryCode}
+          platformName={platformName}
+        />
         {!sidebarCollapsed && (
           <button
             type="button"
@@ -147,7 +158,7 @@ export function TopHeader({
         {/* End Controls: Exchange rate pill + panel/settings button */}
         <div className="flex items-center gap-2.5 shrink-0">
           <div className="flex items-center whitespace-nowrap rounded-[10px] bg-[#e25d0a]/12 px-3 py-1.5 text-[12.5px] font-semibold text-[#e25d0a] font-mono-num">
-            1 USD = {currentAccount.rate.toFixed(2)} {currentAccount.currency}
+            1 USD = {currentAccount.rate.toFixed(2)} {currLabel}
           </div>
 
           <button

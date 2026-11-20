@@ -21,10 +21,11 @@ import {
 import { t } from '../i18n';
 import { AccountDesk, Language, RoutePath } from '../types';
 import { formatNumber } from '../utils/format';
-import { HostapayLogo } from './HpayIcons';
+import { CountryFlagBadge, HostapayLogo } from './HpayIcons';
 
 interface SidebarProps {
   lang: Language;
+  platformName: string;
   currentRoute: RoutePath;
   onNavigate: (route: RoutePath) => void;
   accounts: AccountDesk[];
@@ -41,10 +42,12 @@ interface SidebarProps {
   onShowLogin: () => void;
   openDisputesCount: number;
   availableWithdrawalsCount: number;
+  pendingMessagesCount: number;
 }
 
 export function Sidebar({
   lang,
+  platformName,
   currentRoute,
   onNavigate,
   accounts,
@@ -61,6 +64,7 @@ export function Sidebar({
   onShowLogin,
   openDisputesCount,
   availableWithdrawalsCount,
+  pendingMessagesCount,
 }: SidebarProps) {
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
     deposits: false,
@@ -84,7 +88,7 @@ export function Sidebar({
     <div className="flex h-full flex-col bg-[#141414] border-e border-[#202020] select-none">
       {/* Mobile Header inside drawer (exact match to screenshot 2) */}
       <div className="flex items-center justify-between px-4 h-[3.75rem] border-b border-[#202020] lg:hidden shrink-0">
-        <HostapayLogo countryCode={currentAccount.countryCode} />
+        <HostapayLogo countryCode={currentAccount.countryCode} platformName={platformName} />
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -165,7 +169,7 @@ export function Sidebar({
                 </span>
               </div>
               <span className="text-[12.5px] font-semibold text-[#737373] shrink-0">
-                {currentAccount.currency}
+                {lang === 'ar' && currentAccount.currency === 'EGP' ? 'ج.م' : currentAccount.currency}
               </span>
             </button>
           </>
@@ -375,6 +379,7 @@ export function Sidebar({
           collapsed={isCollapsedDesktop}
           icon={<Inbox className="h-[18px] w-[18px] shrink-0" />}
           label={t(lang, 'messages')}
+          badge={pendingMessagesCount > 0 ? pendingMessagesCount : undefined}
           onClick={() => handleNav('/messages')}
         />
 
@@ -458,15 +463,15 @@ export function Sidebar({
               className="flex flex-1 min-w-0 items-center justify-between gap-2 rounded-[12px] border border-[#242424] bg-[#1a1a1a] px-3 py-2.5 hover:border-[#333333] transition-colors cursor-pointer"
             >
               <div className="flex items-center gap-2.5 min-w-0">
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[9px] bg-[#0d9488]/25 text-[12px] font-bold text-[#2dd4bf]">
-                  {currentAccount.countryCode}
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[9px] bg-[#1f1f1f] border border-[#2c2c2c]">
+                  <CountryFlagBadge code={currentAccount.countryCode} />
                 </span>
                 <div className="min-w-0 text-start">
                   <div className="truncate text-[13px] font-semibold text-white font-mono-num">
                     {currentAccount.username}
                   </div>
                   <div className="text-[11px] text-[#737373]">
-                    {currentAccount.countryCode} | {currentAccount.currency}
+                    {currentAccount.countryCode} | {lang === 'ar' && currentAccount.currency === 'EGP' ? 'جنيه مصري' : currentAccount.currency}
                   </div>
                 </div>
               </div>
@@ -568,12 +573,14 @@ function SingleNavRow({
   collapsed,
   icon,
   label,
+  badge,
   onClick,
 }: {
   active: boolean;
   collapsed: boolean;
   icon: React.ReactNode;
   label: string;
+  badge?: number;
   onClick: () => void;
 }) {
   return (
@@ -581,7 +588,7 @@ function SingleNavRow({
       type="button"
       onClick={onClick}
       title={collapsed ? label : undefined}
-      className={`flex w-full items-center gap-3 rounded-[10px] px-3 py-2.5 text-[14px] font-medium transition-colors cursor-pointer ${
+      className={`flex w-full items-center justify-between gap-2 rounded-[10px] px-3 py-2.5 text-[14px] font-medium transition-colors cursor-pointer ${
         collapsed ? 'lg:justify-center' : ''
       } ${
         active
@@ -589,8 +596,15 @@ function SingleNavRow({
           : 'text-[#8e8e8e] hover:bg-[#1c1c1c] hover:text-white border border-transparent'
       }`}
     >
-      <span className={active ? 'text-white' : 'text-[#8e8e8e]'}>{icon}</span>
-      {!collapsed && <span className="whitespace-nowrap truncate">{label}</span>}
+      <span className="flex items-center gap-3 min-w-0">
+        <span className={active ? 'text-white' : 'text-[#8e8e8e]'}>{icon}</span>
+        {!collapsed && <span className="whitespace-nowrap truncate">{label}</span>}
+      </span>
+      {!collapsed && badge !== undefined && (
+        <span className="shrink-0 rounded-md bg-[#e25d0a]/20 px-1.5 py-0.5 text-[11px] font-mono-num font-bold text-[#e25d0a]">
+          {badge}
+        </span>
+      )}
     </button>
   );
 }
