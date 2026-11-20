@@ -24,6 +24,7 @@ import {
   ToastMessage,
   TopUpRecord,
 } from './types';
+import { executeLocalApi, loadLocalState } from './utils/localStore';
 
 const VALID_ROUTES: RoutePath[] = [
   '/deposits',
@@ -79,10 +80,8 @@ export default function App() {
       setBootPhase('preparing');
       setBootError(null);
     }
-    try {
-      const res = await fetch('/api/state');
-      if (!res.ok) throw new Error('Failed to load state');
-      const data = (await res.json()) as PlatformState;
+
+    const applyLoadedState = (data: PlatformState) => {
       setState(data);
       const path = window.location.pathname as RoutePath;
       if (!VALID_ROUTES.includes(path)) {
@@ -98,9 +97,24 @@ export default function App() {
         setBootPhase('done');
         setLoading(false);
       }
+    };
+
+    try {
+      const res = await fetch('/api/state');
+      const ct = res.headers.get('content-type') || '';
+      if (!res.ok || !ct.includes('application/json')) {
+        applyLoadedState(loadLocalState());
+        return;
+      }
+      const data = (await res.json()) as PlatformState;
+      applyLoadedState(data);
     } catch {
-      setBootError('Failed to connect to trading desk');
-      setLoading(false);
+      try {
+        applyLoadedState(loadLocalState());
+      } catch {
+        setBootError('Failed to connect to trading desk');
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -148,19 +162,40 @@ export default function App() {
   }, []);
 
   const apiCall = useCallback(async (url: string, method: string, body?: unknown) => {
-    const res = await fetch(url, {
-      method,
-      headers: body ? { 'Content-Type': 'application/json' } : undefined,
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    if (!res.ok) throw new Error('Request failed');
-    const json = await res.json();
-    if (json.state) {
-      setState(json.state as PlatformState);
+    const runFallback = () => {
+      const localRes = executeLocalApi(
+        url,
+        method,
+        body as Record<string, unknown> | undefined
+      );
+      if ('state' in localRes) {
+        setState(localRes.state);
+        return localRes;
+      }
+      setState(localRes);
+      return localRes;
+    };
+
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: body ? { 'Content-Type': 'application/json' } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const ct = res.headers.get('content-type') || '';
+      if (!res.ok || !ct.includes('application/json')) {
+        return runFallback();
+      }
+      const json = await res.json();
+      if (json.state) {
+        setState(json.state as PlatformState);
+        return json;
+      }
+      setState(json as PlatformState);
       return json;
+    } catch {
+      return runFallback();
     }
-    setState(json as PlatformState);
-    return json;
   }, []);
 
   const currentAccount = useMemo(() => {
