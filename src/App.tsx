@@ -9,11 +9,13 @@ import {
   FIXED_PLATFORM_NAME,
   addFirestoreRequisite,
   addFirestoreTopUp,
+  clearFirestoreProbeCache,
   createFirestoreDeposit,
   createFirestoreUser,
   deleteFirestoreRequisite,
   deleteFirestoreUser,
   ensureFirestoreConfig,
+  fetchFirestoreUsers,
   loginFirestoreUser,
   pingFirestorePresence,
   respondFirestoreWithdrawal,
@@ -23,6 +25,7 @@ import {
   subscribeAdminCollections,
   subscribeFirestoreConfig,
   subscribeUserCollections,
+  syncAllUsersToFirestore,
   syncUserToFirestore,
   updateFirestoreConfig,
   updateFirestoreDeposit,
@@ -411,6 +414,8 @@ export default function App() {
       const msg = ev.data as { type?: string; payload?: unknown };
       if (msg?.type === 'config' && msg.payload) {
         applyConfigToStates(msg.payload as PlatformConfig);
+      } else if (msg?.type === 'user_upsert' && msg.payload) {
+        upsertUserIntoLocalDb(msg.payload as ManagedUser);
       }
     };
     return () => {
@@ -445,19 +450,37 @@ export default function App() {
         });
       },
       onMessages: (messages) => {
-        setState((prev) => (prev ? { ...prev, messages } : prev));
+        setState((prev) =>
+          prev ? (messages.length === 0 && prev.messages.length > 0 ? prev : { ...prev, messages }) : prev
+        );
       },
       onWithdrawals: (withdrawals) => {
-        setState((prev) => (prev ? { ...prev, withdrawals } : prev));
+        setState((prev) =>
+          prev
+            ? withdrawals.length === 0 && prev.withdrawals.length > 0
+              ? prev
+              : { ...prev, withdrawals }
+            : prev
+        );
       },
       onDeposits: (deposits) => {
-        setState((prev) => (prev ? { ...prev, deposits } : prev));
+        setState((prev) =>
+          prev ? (deposits.length === 0 && prev.deposits.length > 0 ? prev : { ...prev, deposits }) : prev
+        );
       },
       onRequisites: (requisites) => {
-        setState((prev) => (prev ? { ...prev, requisites } : prev));
+        setState((prev) =>
+          prev
+            ? requisites.length === 0 && prev.requisites.length > 0
+              ? prev
+              : { ...prev, requisites }
+            : prev
+        );
       },
       onTopUps: (topUps) => {
-        setState((prev) => (prev ? { ...prev, topUps } : prev));
+        setState((prev) =>
+          prev ? (topUps.length === 0 && prev.topUps.length > 0 ? prev : { ...prev, topUps }) : prev
+        );
       },
     });
     return () => unsub();
@@ -838,6 +861,7 @@ export default function App() {
             };
             if (res.ok && res.user) {
               upsertUserIntoLocalDb(res.user);
+              broadcastSync('user_upsert', res.user);
               setAdminState((prev) =>
                 prev
                   ? {
@@ -853,6 +877,7 @@ export default function App() {
                 user?: ManagedUser;
               };
               if (localCreated.ok && localCreated.user) {
+                broadcastSync('user_upsert', localCreated.user);
                 setAdminState((prev) =>
                   prev
                     ? {
@@ -872,6 +897,10 @@ export default function App() {
           onUpdateUser={async (id, patch: Partial<ManagedUser>) => {
             await updateFirestoreUser(id, patch).catch(() => undefined);
             const res = await apiCall(`/api/admin/users/${id}`, 'PATCH', patch);
+            if (res?.user) {
+              upsertUserIntoLocalDb(res.user as ManagedUser);
+              broadcastSync('user_upsert', res.user);
+            }
             setAdminState((prev) =>
               prev && prev.users
                 ? {
@@ -1029,6 +1058,42 @@ export default function App() {
           }}
           onDownloadPhp={() => {
             window.location.href = '/api/admin/download-php';
+          }}
+          onRetryFirebase={async () => {
+            clearFirestoreProbeCache();
+            const fsCfg = await ensureFirestoreConfig(true);
+            if (!fsCfg.ok) {
+              setFirebaseStatus('permission-error');
+              setFirebaseError(fsCfg.errorMessage || 'تعذر الاتصال بـ Firestore');
+              notify(
+                'warning',
+                'Firestore في مشروع moorrcv غير مفعّل بعد',
+                fsCfg.errorMessage || 'افتح رابط التفعيل في Firebase Console'
+              );
+              return;
+            }
+            setFirebaseStatus('connected');
+            setFirebaseError(null);
+            const localUsers = adminState?.users ?? loadRawLocalDb().users ?? [];
+            const pushedCount = await syncAllUsersToFirestore(localUsers);
+            const remote = await fetchFirestoreUsers();
+            if (remote.ok && remote.users) {
+              for (const u of remote.users) {
+                upsertUserIntoLocalDb(u);
+              }
+              setAdminState((prev) => {
+                if (!prev) return prev;
+                const byId = new Map<string, ManagedUser>();
+                for (const u of prev.users ?? []) byId.set(u.id, u);
+                for (const u of remote.users!) byId.set(u.id, u);
+                return { ...prev, users: Array.from(byId.values()) };
+              });
+            }
+            notify(
+              'success',
+              'تم الربط والمزامنة مع Firebase (moorrcv)',
+              `تمت مزامنة ${pushedCount} حساب محلي + سحب ${remote.users?.length ?? 0} حساب من السيرفر`
+            );
           }}
           onGoToApp={() => {
             navigate('/profile');

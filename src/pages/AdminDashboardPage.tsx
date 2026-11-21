@@ -11,6 +11,7 @@ import {
   Database,
   Download,
   Edit3,
+  ExternalLink,
   Eye,
   EyeOff,
   Globe,
@@ -93,6 +94,7 @@ interface AdminDashboardPageProps {
   }) => Promise<void>;
   onImpersonateUser: (userId: string) => Promise<void>;
   onDownloadPhp: () => void;
+  onRetryFirebase?: () => Promise<void>;
   onGoToApp: () => void;
   onNotify: (type: 'success' | 'error' | 'warning', title: string, message?: string) => void;
 }
@@ -143,12 +145,14 @@ export function AdminDashboardPage({
   onUpdateConfig,
   onImpersonateUser,
   onDownloadPhp,
+  onRetryFirebase,
   onGoToApp,
   onNotify,
 }: AdminDashboardPageProps) {
   const [adminPassInput, setAdminPassInput] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loggingIn, setLoggingIn] = useState(false);
+  const [retryingFirebase, setRetryingFirebase] = useState(false);
   const [tab, setTab] = useState<'users' | 'withdrawals' | 'orders' | 'settings'>('users');
   const [userSearch, setUserSearch] = useState('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -550,27 +554,70 @@ export function AdminDashboardPage({
         <div className="flex-1 min-w-0 space-y-5">
           {/* Firestore Rules Warning Banner (only shown if permission-denied/disabled on moorrcv) */}
           {firebaseStatus === 'permission-error' && (
-            <div className="rounded-[14px] border border-[#db9d37]/40 bg-[#db9d37]/10 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="space-y-1">
-                <div className="flex items-center gap-2 text-[13.5px] font-bold text-[#db9d37]">
-                  <AlertTriangle className="h-4 w-4 shrink-0" />
-                  <span>
-                    ملاحظة Firestore (moorrcv): الحسابات والدخول شغالين الآن عبر السيرفر والمتصفح مباشرة
-                  </span>
+            <div className="rounded-[14px] border border-[#db9d37]/40 bg-[#db9d37]/10 p-4 flex flex-col gap-3">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-[13.5px] font-bold text-[#db9d37]">
+                    <AlertTriangle className="h-4 w-4 shrink-0" />
+                    <span>
+                      ملاحظة Firestore (moorrcv): الحسابات والدخول شغالين الآن عبر السيرفر والمتصفح مباشرة
+                    </span>
+                  </div>
+                  <p className="text-[12px] text-[#d4c39a] leading-relaxed">
+                    لمزامنة الحسابات سحابيًا بين <span className="font-mono-num">admin.php</span> والموقع عبر جميع الأجهزة، فعّل Cloud Firestore في مشروع{' '}
+                    <span className="font-mono-num font-bold text-white">moorrcv</span> واضبط Rules ثم اضغط{' '}
+                    <strong className="text-white">فحص الاتصال ومزامنة الحسابات</strong>.
+                    {firebaseError ? ` (${firebaseError})` : ''}
+                  </p>
                 </div>
-                <p className="text-[12px] text-[#d4c39a]">
-                  لمزامنة الحسابات سحابيًا بين الأجهزة، فعّل Cloud Firestore API في مشروع <span className="font-mono-num">moorrcv</span> واضبط Rules. وحتى وقتها تقدر تنشئ الحسابات وتسجل دخول بيها عادي تمامًا بدون أي مشكلة.
-                  {firebaseError ? ` (${firebaseError})` : ''}
-                </p>
+
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <a
+                    href="https://console.developers.google.com/apis/api/firestore.googleapis.com/overview?project=moorrcv"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 rounded-[10px] border border-[#e25d0a]/50 bg-[#e25d0a]/15 px-3 py-2 text-[12px] font-semibold text-[#ff9352] hover:bg-[#e25d0a]/25"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    <span>تفعيل Firestore في moorrcv</span>
+                  </a>
+                  <a
+                    href="https://console.firebase.google.com/project/moorrcv/firestore/rules"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 rounded-[10px] border border-[#db9d37]/50 bg-[#1a1610] px-3 py-2 text-[12px] font-semibold text-[#db9d37] hover:bg-[#272115]"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    <span>فتح Rules</span>
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() => copyText('rules', FIRESTORE_OPEN_RULES, 'قواعد Firestore')}
+                    className="inline-flex items-center gap-1.5 rounded-[10px] border border-[#db9d37]/50 bg-[#1a1610] px-3 py-2 text-[12px] font-semibold text-[#db9d37] hover:bg-[#272115] cursor-pointer"
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                    <span>نسخ قواعد Firestore</span>
+                  </button>
+                  {onRetryFirebase && (
+                    <button
+                      type="button"
+                      disabled={retryingFirebase}
+                      onClick={async () => {
+                        setRetryingFirebase(true);
+                        try {
+                          await onRetryFirebase();
+                        } finally {
+                          setRetryingFirebase(false);
+                        }
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-[10px] bg-[#00e344] px-3.5 py-2 text-[12px] font-bold text-black hover:bg-[#00e344]/90 disabled:opacity-60 cursor-pointer"
+                    >
+                      <RefreshCw className={`h-3.5 w-3.5 ${retryingFirebase ? 'animate-spin' : ''}`} />
+                      <span>{retryingFirebase ? 'جاري الفحص...' : 'فحص الاتصال ومزامنة الحسابات'}</span>
+                    </button>
+                  )}
+                </div>
               </div>
-              <button
-                type="button"
-                onClick={() => copyText('rules', FIRESTORE_OPEN_RULES, 'قواعد Firestore')}
-                className="shrink-0 inline-flex items-center gap-1.5 rounded-[10px] border border-[#db9d37]/50 bg-[#1a1610] px-3.5 py-2 text-[12px] font-semibold text-[#db9d37] hover:bg-[#272115] cursor-pointer"
-              >
-                <Copy className="h-3.5 w-3.5" />
-                <span>نسخ قواعد Firestore</span>
-              </button>
             </div>
           )}
 

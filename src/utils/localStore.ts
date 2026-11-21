@@ -311,7 +311,7 @@ export function executeLocalApi(
       emailLower: email.toLowerCase(),
       password,
       telegramHandle: `@${prefix}`,
-      balanceEgp: Number(body.balanceEgp) || 0,
+      balanceEgp: 0,
       frozenEgp: 0,
       insuranceEgp: null,
       canTrade: true,
@@ -333,9 +333,23 @@ export function executeLocalApi(
     const id = url.split('/').pop();
     if (method === 'DELETE') {
       db.users = (db.users ?? []).filter((u) => u.id !== id);
+      saveLocalState(db);
+      return { ok: true, state: { ...db, onlineCount: prunePresence(db.onlinePresence).length } };
     } else if (body) {
       const user = (db.users ?? []).find((u) => u.id === id);
-      if (user) Object.assign(user, body);
+      if (user) {
+        const patch = { ...body } as Partial<ManagedUser>;
+        if (typeof patch.email === 'string') {
+          patch.email = patch.email.trim();
+          patch.emailLower = patch.email.toLowerCase();
+        }
+        if (typeof patch.password === 'string') {
+          patch.password = patch.password.trim();
+        }
+        Object.assign(user, patch);
+        saveLocalState(db);
+        return { ok: true, user, state: { ...db, onlineCount: prunePresence(db.onlinePresence).length } };
+      }
     }
     saveLocalState(db);
     return { ok: true, state: { ...db, onlineCount: prunePresence(db.onlinePresence).length } };

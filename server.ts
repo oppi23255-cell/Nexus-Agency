@@ -287,6 +287,7 @@ async function startServer() {
 
   // Live online presence heartbeat
   app.post('/api/presence/ping', (req, res) => {
+    db = loadDb();
     const { visitorId, userId, route } = req.body as {
       visitorId: string;
       userId?: string | null;
@@ -359,6 +360,7 @@ async function startServer() {
 
   // Toggle trade status for logged-in user
   app.post('/api/accounts/trade-status', (req, res) => {
+    db = loadDb();
     const uid = getSessionUserId(req);
     const { canTrade } = req.body as { canTrade: boolean };
     const user = (db.users ?? []).find((u) => u.id === uid);
@@ -370,6 +372,7 @@ async function startServer() {
 
   // Respond to Admin-issued Withdrawal Request from Messages (Confirm -> Deduct | Reject -> Do Not Deduct)
   app.post('/api/messages/:id/withdrawal-response', (req, res) => {
+    db = loadDb();
     const uid = getSessionUserId(req);
     const user = (db.users ?? []).find((u) => u.id === uid);
     if (!user) return res.status(401).json({ ok: false, error: 'Unauthorized' });
@@ -415,6 +418,7 @@ async function startServer() {
 
   // Simulate incoming deposit for active user
   app.post('/api/deposits/simulate', (req, res) => {
+    db = loadDb();
     const uid = getSessionUserId(req);
     const user = (db.users ?? []).find((u) => u.id === uid);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
@@ -451,6 +455,7 @@ async function startServer() {
   });
 
   app.patch('/api/deposits/:id', (req, res) => {
+    db = loadDb();
     const uid = getSessionUserId(req);
     const dep = db.deposits.find((d) => d.id === req.params.id);
     if (!dep) return res.status(404).json({ error: 'Deposit not found' });
@@ -814,7 +819,7 @@ async function startServer() {
       emailLower: cleanEmail.toLowerCase(),
       password: cleanPass,
       telegramHandle: `@${prefix}`,
-      balanceEgp: Number(balanceEgp) || 0,
+      balanceEgp: 0,
       frozenEgp: 0,
       insuranceEgp: null,
       canTrade: true,
@@ -837,9 +842,17 @@ async function startServer() {
     if (!requireAdmin(req, db)) return res.status(401).json({ ok: false, error: 'Unauthorized' });
     const user = (db.users ?? []).find((u) => u.id === req.params.id);
     if (!user) return res.status(404).json({ ok: false, error: 'User not found' });
-    Object.assign(user, req.body);
+    const patch = { ...(req.body as Partial<ManagedUser>) };
+    if (typeof patch.email === 'string') {
+      patch.email = patch.email.trim();
+      patch.emailLower = patch.email.toLowerCase();
+    }
+    if (typeof patch.password === 'string') {
+      patch.password = patch.password.trim();
+    }
+    Object.assign(user, patch);
     saveDb(db);
-    res.json({ ok: true, state: projectAdminState(db) });
+    res.json({ ok: true, user, state: projectAdminState(db) });
   });
 
   app.delete('/api/admin/users/:id', (req, res) => {

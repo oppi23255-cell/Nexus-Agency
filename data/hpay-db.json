@@ -9,12 +9,12 @@
   "users": [],
   "onlinePresence": [
     {
-      "visitorId": "vis_1795171970035_kvjyrp",
+      "visitorId": "vis_1795264255647_v8uec7",
       "userId": null,
       "userName": null,
       "email": null,
       "route": "/profile",
-      "lastPingAt": "2026-11-20T11:29:14.684Z"
+      "lastPingAt": "2026-11-21T12:41:04.396Z"
     }
   ],
   "onlineCount": 0,
@@ -48,13 +48,79 @@
     }
   ],
   "requisites": [],
-  "deposits": [],
+  "deposits": [
+    {
+      "id": "dep_1795264867684",
+      "userId": "usr_1795264867675_685",
+      "orderId": "EG-933171",
+      "accountId": "acc_usr_1795264867675_685",
+      "amountLocal": 1500,
+      "amountUsdt": 30.09,
+      "incomeUsdt": 0,
+      "rate": 49.85,
+      "requisiteId": "req_admin",
+      "bankName": "إيداع فوري من الإدارة",
+      "ownerName": "Test Player",
+      "requisiteNumber": "tp_1795264867671",
+      "status": "completed",
+      "createdAt": "2026-11-21T12:41:07.684Z",
+      "expiresAt": "2026-11-21T12:56:07.684Z",
+      "confirmedAt": "2026-11-21T12:41:07.684Z"
+    },
+    {
+      "id": "dep_1795264845209",
+      "userId": "usr_1795264845198_698",
+      "orderId": "EG-894291",
+      "accountId": "acc_usr_1795264845198_698",
+      "amountLocal": 1500,
+      "amountUsdt": 30.09,
+      "incomeUsdt": 0,
+      "rate": 49.85,
+      "requisiteId": "req_admin",
+      "bankName": "إيداع فوري من الإدارة",
+      "ownerName": "Test Player",
+      "requisiteNumber": "tp_1795264845193",
+      "status": "completed",
+      "createdAt": "2026-11-21T12:40:45.209Z",
+      "expiresAt": "2026-11-21T12:55:45.209Z",
+      "confirmedAt": "2026-11-21T12:40:45.209Z"
+    }
+  ],
   "disputes": [],
   "withdrawals": [],
   "androidDevices": [],
   "telegramBots": [],
   "apiKeys": [],
-  "messages": [],
+  "messages": [
+    {
+      "id": "msg_1795264867684",
+      "userId": "usr_1795264867675_685",
+      "deviceId": "admin_desk",
+      "deviceName": "إدارة المنصة",
+      "sender": "إيداع رصيد فوري",
+      "body": "تم إيداع مبلغ 1,500 ج.م ونزوله في حسابك (tp_1795264867671) بنجاح. رصيدك الحالي: 1,500 ج.م.",
+      "parsedAmount": 1500,
+      "currency": "EGP",
+      "matchedDepositId": "dep_1795264867684",
+      "matchedOrderId": "EG-933171",
+      "status": "matched",
+      "receivedAt": "2026-11-21T12:41:07.684Z"
+    },
+    {
+      "id": "msg_1795264845209",
+      "userId": "usr_1795264845198_698",
+      "deviceId": "admin_desk",
+      "deviceName": "إدارة المنصة",
+      "sender": "إيداع رصيد فوري",
+      "body": "تم إيداع مبلغ 1,500 ج.م ونزوله في حسابك (tp_1795264845193) بنجاح. رصيدك الحالي: 1,500 ج.م.",
+      "parsedAmount": 1500,
+      "currency": "EGP",
+      "matchedDepositId": "dep_1795264845209",
+      "matchedOrderId": "EG-894291",
+      "status": "matched",
+      "receivedAt": "2026-11-21T12:40:45.209Z"
+    }
+  ],
   "topUps": [],
   "referrals": [],
   "settings": {

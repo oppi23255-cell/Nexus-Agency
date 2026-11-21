@@ -4,8 +4,8 @@ import {
   collection,
   deleteDoc,
   doc,
-  getDoc,
-  getDocs,
+  getDocFromServer,
+  getDocsFromServer,
   getFirestore,
   onSnapshot,
   query,
@@ -138,15 +138,85 @@ export function generateUuid(): string {
     .slice(2, 14)}`;
 }
 
-export async function ensureFirestoreConfig(): Promise<{
+export interface FirestoreProbeResult {
+  ok: boolean;
+  apiDisabled: boolean;
+  rulesDenied: boolean;
+  errorMessage?: string;
+}
+
+let cachedProbe: { ts: number; result: FirestoreProbeResult } | null = null;
+
+export function clearFirestoreProbeCache(): void {
+  cachedProbe = null;
+}
+
+export async function probeFirestoreServer(force = false): Promise<FirestoreProbeResult> {
+  if (!force && cachedProbe && Date.now() - cachedProbe.ts < 15_000) {
+    return cachedProbe.result;
+  }
+  const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = setTimeout(() => ctrl?.abort(), 1800);
+  try {
+    const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/(default)/documents/hpay_platform/config?key=${firebaseConfig.apiKey}`;
+    const res = await fetch(url, { signal: ctrl?.signal });
+    clearTimeout(timer);
+    if (res.ok || res.status === 404) {
+      const result: FirestoreProbeResult = { ok: true, apiDisabled: false, rulesDenied: false };
+      cachedProbe = { ts: Date.now(), result };
+      return result;
+    }
+    const text = await res.text().catch(() => '');
+    const lower = text.toLowerCase();
+    const apiDisabled =
+      lower.includes('firestore.googleapis.com') ||
+      lower.includes('access_denied') ||
+      lower.includes('service_disabled') ||
+      lower.includes('has not been used');
+    const rulesDenied = !apiDisabled && (res.status === 403 || lower.includes('permission'));
+    const result: FirestoreProbeResult = {
+      ok: false,
+      apiDisabled,
+      rulesDenied,
+      errorMessage: apiDisabled
+        ? 'خدمة Cloud Firestore API غير مفعّلة في مشروع moorrcv حتى الآن'
+        : rulesDenied
+        ? 'قواعد أمان Firestore Rules مقفولة في مشروع moorrcv'
+        : `HTTP ${res.status}`,
+    };
+    cachedProbe = { ts: Date.now(), result };
+    return result;
+  } catch (err) {
+    clearTimeout(timer);
+    return {
+      ok: false,
+      apiDisabled: false,
+      rulesDenied: false,
+      errorMessage: err instanceof Error ? err.message : 'تعذر الوصول إلى Firebase',
+    };
+  }
+}
+
+export async function ensureFirestoreConfig(forceProbe = false): Promise<{
   ok: boolean;
   config?: PlatformConfig;
   permissionError?: boolean;
+  apiDisabled?: boolean;
   unavailable?: boolean;
   errorMessage?: string;
 }> {
+  const probe = await probeFirestoreServer(forceProbe);
+  if (!probe.ok) {
+    return {
+      ok: false,
+      permissionError: probe.apiDisabled || probe.rulesDenied,
+      apiDisabled: probe.apiDisabled,
+      unavailable: true,
+      errorMessage: probe.errorMessage,
+    };
+  }
   try {
-    const snap = await withTimeout(getDoc(COL_CONFIG_DOC));
+    const snap = await withTimeout(getDocFromServer(COL_CONFIG_DOC));
     if (!snap.exists()) {
       await withTimeout(setDoc(COL_CONFIG_DOC, DEFAULT_CONFIG)).catch(() => undefined);
       return { ok: true, config: DEFAULT_CONFIG };
@@ -176,8 +246,16 @@ export async function verifyFirestoreAdminPassword(password: string): Promise<{
   unavailable?: boolean;
   permissionError?: boolean;
 }> {
+  const probe = await probeFirestoreServer();
+  if (!probe.ok) {
+    return {
+      ok: false,
+      unavailable: true,
+      permissionError: probe.apiDisabled || probe.rulesDenied,
+    };
+  }
   try {
-    const snap = await withTimeout(getDoc(COL_CONFIG_DOC));
+    const snap = await withTimeout(getDocFromServer(COL_CONFIG_DOC));
     const cfg: PlatformConfig = snap.exists()
       ? {
           ...DEFAULT_CONFIG,
@@ -203,7 +281,9 @@ export async function verifyFirestoreAdminPassword(password: string): Promise<{
   }
 }
 
-export async function syncUserToFirestore(user: ManagedUser): Promise<void> {
+export async function syncUserToFirestore(user: ManagedUser): Promise<boolean> {
+  const probe = await probeFirestoreServer();
+  if (!probe.ok) return false;
   try {
     await withTimeout(
       setDoc(
@@ -217,8 +297,37 @@ export async function syncUserToFirestore(user: ManagedUser): Promise<void> {
         { merge: true }
       )
     );
+    return true;
   } catch {
-    // ignore if Firestore is unavailable or rules block writes
+    return false;
+  }
+}
+
+export async function syncAllUsersToFirestore(users: ManagedUser[]): Promise<number> {
+  const probe = await probeFirestoreServer();
+  if (!probe.ok || users.length === 0) return 0;
+  let synced = 0;
+  for (const u of users) {
+    const ok = await syncUserToFirestore(u);
+    if (ok) synced++;
+  }
+  return synced;
+}
+
+export async function fetchFirestoreUsers(): Promise<{
+  ok: boolean;
+  users?: ManagedUser[];
+}> {
+  const probe = await probeFirestoreServer();
+  if (!probe.ok) return { ok: false };
+  try {
+    const snap = await withTimeout(getDocsFromServer(COL_USERS));
+    return {
+      ok: true,
+      users: snap.docs.map((d) => d.data() as ManagedUser),
+    };
+  } catch {
+    return { ok: false };
   }
 }
 
@@ -279,8 +388,17 @@ export async function createFirestoreUser(payload: {
     return { ok: false, error: 'البريد الإلكتروني وكلمة المرور مطلوبين' };
   }
 
+  const probe = await probeFirestoreServer();
+  if (!probe.ok) {
+    return {
+      ok: false,
+      permissionError: probe.apiDisabled || probe.rulesDenied,
+      unavailable: true,
+    };
+  }
+
   try {
-    const allSnap = await withTimeout(getDocs(COL_USERS));
+    const allSnap = await withTimeout(getDocsFromServer(COL_USERS));
     const existingUsers = allSnap.docs.map((d) => d.data() as ManagedUser);
     if (existingUsers.some((u) => (u.emailLower || u.email.toLowerCase()) === emailLower)) {
       return { ok: false, error: 'البريد الإلكتروني مسجل من قبل' };
@@ -300,7 +418,7 @@ export async function createFirestoreUser(payload: {
       emailLower,
       password: cleanPass,
       telegramHandle: `@${prefix}`,
-      balanceEgp: Number(payload.balanceEgp) || 0,
+      balanceEgp: 0,
       frozenEgp: 0,
       insuranceEgp: null,
       canTrade: true,
@@ -322,7 +440,6 @@ export async function createFirestoreUser(payload: {
       ok: false,
       permissionError: info.permissionError,
       unavailable: info.unavailable,
-      // Only treat non-connection errors as blocking; unavailable/permission falls back cleanly
       error: info.unavailable ? undefined : info.message,
     };
   }
@@ -337,18 +454,25 @@ export async function loginFirestoreUser(
   error?: string;
   unavailable?: boolean;
 }> {
-  try {
-    const cleanEmail = email.trim().toLowerCase();
-    const cleanPass = password.trim();
-    if (!cleanEmail || !cleanPass) {
-      return { ok: false, error: 'من فضلك اكتب البريد الإلكتروني وكلمة المرور' };
-    }
+  const cleanEmail = email.trim().toLowerCase();
+  const cleanPass = password.trim();
+  if (!cleanEmail || !cleanPass) {
+    return { ok: false, error: 'من فضلك اكتب البريد الإلكتروني وكلمة المرور' };
+  }
 
-    // Query by emailLower first, and fall back to scanning all users in case emailLower wasn't indexed/set
-    const qSnap = await withTimeout(getDocs(query(COL_USERS, where('emailLower', '==', cleanEmail))));
+  const probe = await probeFirestoreServer();
+  if (!probe.ok) {
+    return { ok: false, unavailable: true };
+  }
+
+  try {
+    // Query server directly so offline cache never returns empty []
+    const qSnap = await withTimeout(
+      getDocsFromServer(query(COL_USERS, where('emailLower', '==', cleanEmail)))
+    );
     let match: ManagedUser | undefined = qSnap.docs.map((d) => d.data() as ManagedUser)[0];
     if (!match) {
-      const allSnap = await withTimeout(getDocs(COL_USERS));
+      const allSnap = await withTimeout(getDocsFromServer(COL_USERS));
       match = allSnap.docs
         .map((d) => d.data() as ManagedUser)
         .find((u) => u.email.trim().toLowerCase() === cleanEmail);
@@ -706,12 +830,20 @@ export async function sendFirestoreInstantDeposit(payload: {
   error?: string;
   unavailable?: boolean;
 }> {
+  const probe = await probeFirestoreServer();
+  if (!probe.ok) {
+    return {
+      ok: false,
+      unavailable: true,
+      error: probe.errorMessage || 'تعذر الوصول إلى Firebase',
+    };
+  }
   try {
     let targetUserId = payload.userId?.trim() || '';
     if (!targetUserId && payload.identifier?.trim()) {
       const qRaw = payload.identifier.trim().toLowerCase();
       const qNoAt = qRaw.replace(/^@/, '');
-      const allSnap = await withTimeout(getDocs(COL_USERS));
+      const allSnap = await withTimeout(getDocsFromServer(COL_USERS));
       const found = allSnap.docs
         .map((d) => d.data() as ManagedUser)
         .find(
