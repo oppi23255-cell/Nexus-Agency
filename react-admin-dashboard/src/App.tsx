@@ -22,7 +22,50 @@ import { loadAdminDb, runLocalAdminAction, saveAdminDb, upsertUserInLocalDb } fr
 
 const ADMIN_SESSION_KEY = 'egyptpay_admin_pass_v1';
 
+class AdminErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; message: string }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, message: '' };
+  }
+
+  static getDerivedStateFromError(err: Error) {
+    return { hasError: true, message: err?.message || 'Render error' };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div dir="rtl" className="min-h-dvh bg-[#0e0e10] text-white flex items-center justify-center p-4">
+          <div className="max-w-md w-full rounded-2xl border border-[#28282d] bg-[#151518] p-6 text-center space-y-4">
+            <div className="text-[17px] font-bold">حدث خطأ مؤقت في لوحة الإدارة</div>
+            <div className="text-[12.5px] text-[#8d8d95] font-mono-num">{this.state.message}</div>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="rounded-xl bg-[#e25d0a] px-5 py-2 text-[13px] font-semibold text-white cursor-pointer"
+            >
+              إعادة التحميل
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function App() {
+  return (
+    <AdminErrorBoundary>
+      <AdminAppInner />
+    </AdminErrorBoundary>
+  );
+}
+
+function AdminAppInner() {
   const [state, setState] = useState<PlatformState>(() => loadAdminDb());
   const [adminPassword, setAdminPassword] = useState<string | null>(() => {
     try {

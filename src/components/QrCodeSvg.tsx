@@ -13,6 +13,7 @@ export function QrCodeSvg({
   size?: number;
   className?: string;
 }) {
+  const safeValue = String(value || 'NexusAgency');
   const grid = 21;
   const cells: boolean[][] = Array.from({ length: grid }, () => Array(grid).fill(false));
 
@@ -32,8 +33,8 @@ export function QrCodeSvg({
 
   // Deterministic hash fill for data modules
   let seed = 2166136261;
-  for (let i = 0; i < value.length; i++) {
-    seed ^= value.charCodeAt(i);
+  for (let i = 0; i < safeValue.length; i++) {
+    seed ^= safeValue.charCodeAt(i);
     seed = Math.imul(seed, 16777619);
   }
 

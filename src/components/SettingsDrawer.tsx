@@ -181,6 +181,7 @@ export function SettingsDrawer({
             value={settings.defaultLanding}
             onChange={(val) => onUpdate({ defaultLanding: val as RoutePath })}
             options={[
+              { value: '/profile', label: t(lang, 'profile') },
               { value: '/deposits', label: t(lang, 'depositsListing') },
               { value: '/withdrawals', label: t(lang, 'withdrawalsListing') },
               { value: '/statistics', label: t(lang, 'statistics') },

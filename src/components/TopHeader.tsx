@@ -81,10 +81,6 @@ const ROUTE_META: Record<RoutePath, { parent?: TranslationKey; title: Translatio
     title: 'referrals',
     icon: <Users className="h-[18px] w-[18px] text-white" />,
   },
-  '/admin.php': {
-    title: 'profile',
-    icon: <Settings className="h-[18px] w-[18px] text-[#e25d0a]" />,
-  },
 };
 
 export function TopHeader({
@@ -158,7 +154,7 @@ export function TopHeader({
         {/* End Controls: Exchange rate pill + panel/settings button */}
         <div className="flex items-center gap-2.5 shrink-0">
           <div className="flex items-center whitespace-nowrap rounded-[10px] bg-[#e25d0a]/12 px-3 py-1.5 text-[12.5px] font-semibold text-[#e25d0a] font-mono-num">
-            1 USD = {currentAccount.rate.toFixed(2)} {currLabel}
+            1 USD = {(Number.isFinite(Number(currentAccount.rate)) ? Number(currentAccount.rate) : 49.85).toFixed(2)} {currLabel}
           </div>
 
           <button

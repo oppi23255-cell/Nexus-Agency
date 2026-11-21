@@ -12,8 +12,7 @@ export type RoutePath =
   | '/automatic/api'
   | '/messages'
   | '/profile'
-  | '/referrals'
-  | '/admin.php';
+  | '/referrals';
 
 export type DepositStatus = 'pending' | 'completed' | 'disputed' | 'cancelled' | 'expired';
 export type DisputeStatus = 'open' | 'reviewing' | 'resolved_approve' | 'resolved_reject';

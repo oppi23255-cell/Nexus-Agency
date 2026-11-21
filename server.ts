@@ -111,7 +111,53 @@ function prunePresence(list: OnlinePresenceEntry[] = []): OnlinePresenceEntry[] 
   });
 }
 
-function buildAccountForUser(user: ManagedUser, rate: number): AccountDesk {
+function normalizeManagedUser(raw: Partial<ManagedUser>): ManagedUser {
+  const email = String(raw.email || '').trim();
+  const prefix = email.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '') || 'agent';
+  const id = String(raw.id || `usr_${Date.now()}`).trim();
+  const playerId =
+    typeof raw.playerId === 'string' && raw.playerId.trim()
+      ? raw.playerId.trim()
+      : `PL-${id.replace(/\D/g, '').slice(-8).padStart(8, '4')}`;
+  const bal = Number(raw.balanceEgp);
+  const frozen = Number(raw.frozenEgp);
+  const ins = raw.insuranceEgp === null || raw.insuranceEgp === undefined ? null : Number(raw.insuranceEgp);
+  const depFee = Number(raw.depositFeePct);
+  const wdFee = Number(raw.withdrawalFeePct);
+  const refFee = Number(raw.referralRatePct);
+
+  return {
+    id,
+    playerId,
+    uuid:
+      typeof raw.uuid === 'string' && raw.uuid.trim()
+        ? raw.uuid.trim()
+        : crypto.randomUUID(),
+    username: String(raw.username || `${prefix}_egp`).trim(),
+    displayName: String(raw.displayName || prefix).trim(),
+    email,
+    emailLower: email.toLowerCase(),
+    password: String(raw.password || '').trim(),
+    telegramHandle: String(raw.telegramHandle || `@${prefix}`).trim(),
+    balanceEgp: Number.isFinite(bal) ? bal : 0,
+    frozenEgp: Number.isFinite(frozen) ? frozen : 0,
+    insuranceEgp: ins !== null && Number.isFinite(ins) ? ins : null,
+    canTrade: raw.canTrade !== false,
+    active: raw.active !== false,
+    depositFeePct: Number.isFinite(depFee) ? depFee : 3.0,
+    withdrawalFeePct: Number.isFinite(wdFee) ? wdFee : 1.8,
+    referralCode: String(raw.referralCode || `EG-${playerId.replace('PL-', '')}`).trim(),
+    referralRatePct: Number.isFinite(refFee) ? refFee : 0.5,
+    twoFactorEnabled: raw.twoFactorEnabled !== false,
+    trc20Address: String(raw.trc20Address || 'TY9xK8mPq7VwRz4nLp3JdXs2kF9aBc7eW1').trim(),
+    createdAt: String(raw.createdAt || new Date().toISOString()),
+    ...(raw.lastSeenAt ? { lastSeenAt: raw.lastSeenAt } : {}),
+  };
+}
+
+function buildAccountForUser(rawUser: ManagedUser, rate: number): AccountDesk {
+  const user = normalizeManagedUser(rawUser);
+  const safeRate = Number.isFinite(Number(rate)) && Number(rate) > 0 ? Number(rate) : 49.85;
   return {
     account_id: `acc_${user.id}`,
     userId: user.id,
@@ -124,7 +170,7 @@ function buildAccountForUser(user: ManagedUser, rate: number): AccountDesk {
     balanceUsdt: user.balanceEgp,
     frozenUsdt: user.frozenEgp,
     insuranceAmount: user.insuranceEgp,
-    rate,
+    rate: safeRate,
     canTrade: user.canTrade,
     depositFeePct: user.depositFeePct,
     withdrawalFeePct: user.withdrawalFeePct,
@@ -133,7 +179,7 @@ function buildAccountForUser(user: ManagedUser, rate: number): AccountDesk {
 
 function projectStateForUser(db: PlatformState, sessionUserId?: string | null): PlatformState {
   db.onlinePresence = prunePresence(db.onlinePresence);
-  const users = db.users ?? [];
+  const users = (db.users ?? []).map(normalizeManagedUser);
   const user = sessionUserId ? users.find((u) => u.id === sessionUserId && u.active) : undefined;
 
   if (!user) {
@@ -207,16 +253,16 @@ function projectStateForUser(db: PlatformState, sessionUserId?: string | null): 
     },
     currentAccountId: acc.account_id,
     accounts: [acc],
-    requisites: db.requisites.filter((r) => r.userId === user.id || r.accountId === acc.account_id),
-    deposits: db.deposits.filter((d) => d.userId === user.id || d.accountId === acc.account_id),
-    disputes: db.disputes.filter((d) => d.userId === user.id || d.accountId === acc.account_id),
-    withdrawals: db.withdrawals.filter((w) => w.userId === user.id || w.accountId === acc.account_id),
-    androidDevices: db.androidDevices.filter((a) => a.userId === user.id),
-    telegramBots: db.telegramBots.filter((t) => t.userId === user.id),
-    apiKeys: db.apiKeys.filter((k) => k.userId === user.id),
-    messages: db.messages.filter((m) => m.userId === user.id),
-    topUps: db.topUps.filter((tp) => tp.userId === user.id),
-    referrals: db.referrals.filter((rf) => rf.userId === user.id),
+    requisites: (db.requisites ?? []).filter((r) => r.userId === user.id || r.accountId === acc.account_id),
+    deposits: (db.deposits ?? []).filter((d) => d.userId === user.id || d.accountId === acc.account_id),
+    disputes: (db.disputes ?? []).filter((d) => d.userId === user.id || d.accountId === acc.account_id),
+    withdrawals: (db.withdrawals ?? []).filter((w) => w.userId === user.id || w.accountId === acc.account_id),
+    androidDevices: (db.androidDevices ?? []).filter((a) => a.userId === user.id),
+    telegramBots: (db.telegramBots ?? []).filter((t) => t.userId === user.id),
+    apiKeys: (db.apiKeys ?? []).filter((k) => k.userId === user.id),
+    messages: (db.messages ?? []).filter((m) => m.userId === user.id),
+    topUps: (db.topUps ?? []).filter((tp) => tp.userId === user.id),
+    referrals: (db.referrals ?? []).filter((rf) => rf.userId === user.id),
   };
 }
 
@@ -354,8 +400,50 @@ async function startServer() {
     });
   });
 
+  // Sync authenticated Firestore/localStorage user into Express session DB so all dashboard endpoints work cleanly
+  app.post('/api/auth/sync-session', (req, res) => {
+    db = loadDb();
+    const rawUser = (req.body as { user?: Partial<ManagedUser> } | undefined)?.user;
+    if (!rawUser || !rawUser.id || !rawUser.email) {
+      return res.status(400).json({ ok: false, error: 'Valid user payload required' });
+    }
+    const normalized = normalizeManagedUser(rawUser);
+    if (!normalized.active) {
+      return res.status(403).json({ ok: false, error: 'الحساب موقوف مؤقتاً من الإدارة' });
+    }
+    normalized.lastSeenAt = new Date().toISOString();
+    const list = db.users ?? [];
+    const idx = list.findIndex(
+      (u) => u.id === normalized.id || u.email.trim().toLowerCase() === normalized.emailLower
+    );
+    if (idx >= 0) {
+      const existing = normalizeManagedUser(list[idx]);
+      list[idx] = {
+        ...existing,
+        ...normalized,
+        id: existing.id === normalized.id ? existing.id : normalized.id,
+      };
+    } else {
+      list.unshift(normalized);
+    }
+    db.users = list;
+    saveDb(db);
+    res.json({
+      ok: true,
+      userId: normalized.id,
+      user: normalized,
+      state: projectStateForUser(db, normalized.id),
+    });
+  });
+
   app.post('/api/auth/logout', (_req, res) => {
     res.json({ ok: true, state: projectStateForUser(db, null) });
+  });
+
+  app.post('/api/accounts/switch', (req, res) => {
+    db = loadDb();
+    const uid = getSessionUserId(req);
+    res.json(projectStateForUser(db, uid));
   });
 
   // Toggle trade status for logged-in user
@@ -1044,15 +1132,6 @@ async function startServer() {
     res.json(projectAdminState(db));
   });
 
-  app.get('/api/admin/download-php', (_req, res) => {
-    const phpPath = path.join(__dirname, 'admin.php');
-    if (fs.existsSync(phpPath)) {
-      res.download(phpPath, 'admin.php');
-    } else {
-      res.status(404).send('admin.php not found');
-    }
-  });
-
   // Vite middleware in dev vs static dist in production
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
@@ -1060,23 +1139,16 @@ async function startServer() {
       appType: 'spa',
     });
 
-    // Prevent Vite static middleware from serving raw root /admin.php source text
-    app.get(['/admin', '/admin.php'], async (req, res, next) => {
-      try {
-        const indexPath = path.resolve(__dirname, 'index.html');
-        let html = fs.readFileSync(indexPath, 'utf8');
-        html = await vite.transformIndexHtml(req.originalUrl, html);
-        res.status(200).set({ 'Content-Type': 'text/html' }).end(html);
-      } catch (err) {
-        next(err);
-      }
+    // Redirect /admin and /admin.php to the main platform so admin is not exposed on the public site
+    app.get(['/admin', '/admin.php'], (_req, res) => {
+      res.redirect('/');
     });
 
     app.use(vite.middlewares);
   } else {
     const distPath = path.resolve(__dirname, 'dist');
     app.get(['/admin', '/admin.php'], (_req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+      res.redirect('/');
     });
     app.use(express.static(distPath));
     app.get('*', (_req, res) => {

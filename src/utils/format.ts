@@ -1,37 +1,43 @@
 import { AppSettings } from '../types';
 
-export function formatNumber(val: number, decimals = 2): string {
-  return val.toLocaleString('en-US', {
+export function formatNumber(val: number | null | undefined, decimals = 2): string {
+  const num = Number(val);
+  const safe = Number.isFinite(num) ? num : 0;
+  return safe.toLocaleString('en-US', {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
   });
 }
 
-export function formatMoney(val: number, decimals = 0): string {
-  return val.toLocaleString('en-US', {
+export function formatMoney(val: number | null | undefined, decimals = 0): string {
+  const num = Number(val);
+  const safe = Number.isFinite(num) ? num : 0;
+  return safe.toLocaleString('en-US', {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
   });
 }
 
-export function formatDateTime(iso: string, settings: AppSettings): string {
+export function formatDateTime(iso: string | null | undefined, settings?: Partial<AppSettings>): string {
+  if (!iso) return '—';
   const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
+  if (Number.isNaN(date.getTime())) return String(iso);
 
   // Apply configured timezone offset in hours relative to UTC
-  const shifted = new Date(date.getTime() + settings.tzOffset * 3600_000);
+  const tz = Number.isFinite(Number(settings?.tzOffset)) ? Number(settings?.tzOffset) : 2;
+  const shifted = new Date(date.getTime() + tz * 3600_000);
   const dd = String(shifted.getUTCDate()).padStart(2, '0');
   const mm = String(shifted.getUTCMonth() + 1).padStart(2, '0');
   const yyyy = shifted.getUTCFullYear();
 
   let datePart = `${dd}.${mm}.${yyyy}`;
-  if (settings.dateFormat === 'YYYY-MM-DD') datePart = `${yyyy}-${mm}-${dd}`;
-  if (settings.dateFormat === 'MM/DD/YYYY') datePart = `${mm}/${dd}/${yyyy}`;
+  if (settings?.dateFormat === 'YYYY-MM-DD') datePart = `${yyyy}-${mm}-${dd}`;
+  if (settings?.dateFormat === 'MM/DD/YYYY') datePart = `${mm}/${dd}/${yyyy}`;
 
   let hours = shifted.getUTCHours();
   const mins = String(shifted.getUTCMinutes()).padStart(2, '0');
   let timePart = `${String(hours).padStart(2, '0')}:${mins}`;
-  if (settings.clockFormat === '12h') {
+  if (settings?.clockFormat === '12h') {
     const suffix = hours >= 12 ? 'PM' : 'AM';
     hours = hours % 12 || 12;
     timePart = `${hours}:${mins} ${suffix}`;
@@ -40,8 +46,11 @@ export function formatDateTime(iso: string, settings: AppSettings): string {
   return `${datePart} ${timePart}`;
 }
 
-export function formatRemainingMinutes(expiresAt: string, lang: 'ar' | 'en'): string {
-  const diffMs = new Date(expiresAt).getTime() - Date.now();
+export function formatRemainingMinutes(expiresAt: string | null | undefined, lang: 'ar' | 'en'): string {
+  if (!expiresAt) return lang === 'ar' ? 'منتهي' : 'Expired';
+  const ts = new Date(expiresAt).getTime();
+  if (Number.isNaN(ts)) return lang === 'ar' ? 'منتهي' : 'Expired';
+  const diffMs = ts - Date.now();
   if (diffMs <= 0) return lang === 'ar' ? 'منتهي' : 'Expired';
   const totalSec = Math.floor(diffMs / 1000);
   const mins = Math.floor(totalSec / 60);

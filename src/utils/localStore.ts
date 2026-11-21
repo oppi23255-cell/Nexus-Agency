@@ -97,7 +97,53 @@ function prunePresence(list: OnlinePresenceEntry[] = []): OnlinePresenceEntry[] 
   });
 }
 
-export function buildAccountForUser(user: ManagedUser, rate: number): AccountDesk {
+export function normalizeManagedUser(raw: Partial<ManagedUser>): ManagedUser {
+  const email = String(raw.email || '').trim();
+  const prefix = email.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '') || 'agent';
+  const id = String(raw.id || `usr_${Date.now()}`).trim();
+  const playerId =
+    typeof raw.playerId === 'string' && raw.playerId.trim()
+      ? raw.playerId.trim()
+      : `PL-${id.replace(/\D/g, '').slice(-8).padStart(8, '4')}`;
+  const bal = Number(raw.balanceEgp);
+  const frozen = Number(raw.frozenEgp);
+  const ins = raw.insuranceEgp === null || raw.insuranceEgp === undefined ? null : Number(raw.insuranceEgp);
+  const depFee = Number(raw.depositFeePct);
+  const wdFee = Number(raw.withdrawalFeePct);
+  const refFee = Number(raw.referralRatePct);
+
+  return {
+    id,
+    playerId,
+    uuid:
+      typeof raw.uuid === 'string' && raw.uuid.trim()
+        ? raw.uuid.trim()
+        : `01a1a848-${Math.random().toString(16).slice(2, 6)}-7533-a6f9-${Math.random().toString(16).slice(2, 14)}`,
+    username: String(raw.username || `${prefix}_egp`).trim(),
+    displayName: String(raw.displayName || prefix).trim(),
+    email,
+    emailLower: email.toLowerCase(),
+    password: String(raw.password || '').trim(),
+    telegramHandle: String(raw.telegramHandle || `@${prefix}`).trim(),
+    balanceEgp: Number.isFinite(bal) ? bal : 0,
+    frozenEgp: Number.isFinite(frozen) ? frozen : 0,
+    insuranceEgp: ins !== null && Number.isFinite(ins) ? ins : null,
+    canTrade: raw.canTrade !== false,
+    active: raw.active !== false,
+    depositFeePct: Number.isFinite(depFee) ? depFee : 3.0,
+    withdrawalFeePct: Number.isFinite(wdFee) ? wdFee : 1.8,
+    referralCode: String(raw.referralCode || `EG-${playerId.replace('PL-', '')}`).trim(),
+    referralRatePct: Number.isFinite(refFee) ? refFee : 0.5,
+    twoFactorEnabled: raw.twoFactorEnabled !== false,
+    trc20Address: String(raw.trc20Address || 'TY9xK8mPq7VwRz4nLp3JdXs2kF9aBc7eW1').trim(),
+    createdAt: String(raw.createdAt || new Date().toISOString()),
+    ...(raw.lastSeenAt ? { lastSeenAt: raw.lastSeenAt } : {}),
+  };
+}
+
+export function buildAccountForUser(rawUser: ManagedUser, rate: number): AccountDesk {
+  const user = normalizeManagedUser(rawUser);
+  const safeRate = Number.isFinite(Number(rate)) && Number(rate) > 0 ? Number(rate) : 49.85;
   return {
     account_id: `acc_${user.id}`,
     userId: user.id,
@@ -110,7 +156,7 @@ export function buildAccountForUser(user: ManagedUser, rate: number): AccountDes
     balanceUsdt: user.balanceEgp,
     frozenUsdt: user.frozenEgp,
     insuranceAmount: user.insuranceEgp,
-    rate,
+    rate: safeRate,
     canTrade: user.canTrade,
     depositFeePct: user.depositFeePct,
     withdrawalFeePct: user.withdrawalFeePct,
@@ -119,11 +165,34 @@ export function buildAccountForUser(user: ManagedUser, rate: number): AccountDes
 
 export function buildPlatformStateForUser(
   base: PlatformState,
-  user: ManagedUser
+  rawUser: ManagedUser
 ): PlatformState {
-  const acc = buildAccountForUser(user, base.config.usdRate);
+  const user = normalizeManagedUser(rawUser);
+  const seed = createClientSeedState();
+  const safeConfig = {
+    ...seed.config,
+    ...(base.config || {}),
+    platformName: FIXED_PLATFORM_NAME,
+  };
+  const acc = buildAccountForUser(user, safeConfig.usdRate);
   return {
+    ...seed,
     ...base,
+    config: safeConfig,
+    settings: {
+      ...seed.settings,
+      ...(base.settings || {}),
+    },
+    requisites: Array.isArray(base.requisites) ? base.requisites : [],
+    deposits: Array.isArray(base.deposits) ? base.deposits : [],
+    disputes: Array.isArray(base.disputes) ? base.disputes : [],
+    withdrawals: Array.isArray(base.withdrawals) ? base.withdrawals : [],
+    androidDevices: Array.isArray(base.androidDevices) ? base.androidDevices : [],
+    telegramBots: Array.isArray(base.telegramBots) ? base.telegramBots : [],
+    apiKeys: Array.isArray(base.apiKeys) ? base.apiKeys : [],
+    messages: Array.isArray(base.messages) ? base.messages : [],
+    topUps: Array.isArray(base.topUps) ? base.topUps : [],
+    referrals: Array.isArray(base.referrals) ? base.referrals : [],
     authenticated: true,
     activeUserId: user.id,
     users: undefined,
@@ -147,11 +216,15 @@ export function buildPlatformStateForUser(
 
 function projectUserView(db: PlatformState, userId?: string | null): PlatformState {
   db.onlinePresence = prunePresence(db.onlinePresence);
-  const users = db.users ?? [];
+  const users = (db.users ?? []).map(normalizeManagedUser);
   const user = userId ? users.find((u) => u.id === userId && u.active) : undefined;
   if (!user) {
+    const seed = createClientSeedState();
     return {
+      ...seed,
       ...db,
+      config: { ...seed.config, ...(db.config || {}), platformName: FIXED_PLATFORM_NAME },
+      settings: { ...seed.settings, ...(db.settings || {}) },
       authenticated: false,
       activeUserId: null,
       users: undefined,
@@ -163,33 +236,49 @@ function projectUserView(db: PlatformState, userId?: string | null): PlatformSta
   return {
     ...buildPlatformStateForUser(db, user),
     onlineCount: db.onlinePresence.length,
-    requisites: db.requisites.filter((r) => r.userId === user.id || r.accountId === acc.account_id),
-    deposits: db.deposits.filter((d) => d.userId === user.id || d.accountId === acc.account_id),
-    disputes: db.disputes.filter((d) => d.userId === user.id || d.accountId === acc.account_id),
-    withdrawals: db.withdrawals.filter((w) => w.userId === user.id || w.accountId === acc.account_id),
-    androidDevices: db.androidDevices.filter((a) => a.userId === user.id),
-    telegramBots: db.telegramBots.filter((t) => t.userId === user.id),
-    apiKeys: db.apiKeys.filter((k) => k.userId === user.id),
-    messages: db.messages.filter((m) => m.userId === user.id),
-    topUps: db.topUps.filter((tp) => tp.userId === user.id),
-    referrals: db.referrals.filter((rf) => rf.userId === user.id),
+    requisites: (db.requisites ?? []).filter((r) => r.userId === user.id || r.accountId === acc.account_id),
+    deposits: (db.deposits ?? []).filter((d) => d.userId === user.id || d.accountId === acc.account_id),
+    disputes: (db.disputes ?? []).filter((d) => d.userId === user.id || d.accountId === acc.account_id),
+    withdrawals: (db.withdrawals ?? []).filter((w) => w.userId === user.id || w.accountId === acc.account_id),
+    androidDevices: (db.androidDevices ?? []).filter((a) => a.userId === user.id),
+    telegramBots: (db.telegramBots ?? []).filter((t) => t.userId === user.id),
+    apiKeys: (db.apiKeys ?? []).filter((k) => k.userId === user.id),
+    messages: (db.messages ?? []).filter((m) => m.userId === user.id),
+    topUps: (db.topUps ?? []).filter((tp) => tp.userId === user.id),
+    referrals: (db.referrals ?? []).filter((rf) => rf.userId === user.id),
   };
 }
 
 export function loadRawLocalDb(): PlatformState {
+  const seed = createClientSeedState();
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
-      const parsed = JSON.parse(raw) as PlatformState;
+      const parsed = JSON.parse(raw) as Partial<PlatformState>;
       if (parsed.config && Array.isArray(parsed.users)) {
-        parsed.config.platformName = FIXED_PLATFORM_NAME;
-        return parsed;
+        return {
+          ...seed,
+          ...parsed,
+          config: { ...seed.config, ...parsed.config, platformName: FIXED_PLATFORM_NAME },
+          settings: { ...seed.settings, ...(parsed.settings || {}) },
+          users: parsed.users.map(normalizeManagedUser),
+          onlinePresence: Array.isArray(parsed.onlinePresence) ? parsed.onlinePresence : [],
+          requisites: Array.isArray(parsed.requisites) ? parsed.requisites : [],
+          deposits: Array.isArray(parsed.deposits) ? parsed.deposits : [],
+          disputes: Array.isArray(parsed.disputes) ? parsed.disputes : [],
+          withdrawals: Array.isArray(parsed.withdrawals) ? parsed.withdrawals : [],
+          androidDevices: Array.isArray(parsed.androidDevices) ? parsed.androidDevices : [],
+          telegramBots: Array.isArray(parsed.telegramBots) ? parsed.telegramBots : [],
+          apiKeys: Array.isArray(parsed.apiKeys) ? parsed.apiKeys : [],
+          messages: Array.isArray(parsed.messages) ? parsed.messages : [],
+          topUps: Array.isArray(parsed.topUps) ? parsed.topUps : [],
+          referrals: Array.isArray(parsed.referrals) ? parsed.referrals : [],
+        };
       }
     }
   } catch {
     // ignore
   }
-  const seed = createClientSeedState();
   saveLocalState(seed);
   return seed;
 }
@@ -246,19 +335,29 @@ export function executeLocalApi(
     const email = String(body.email || '').trim().toLowerCase();
     const password = String(body.password || '');
     const cleanPass = password.trim();
-    const user = (db.users ?? []).find(
+    const match = (db.users ?? []).find(
       (u) =>
         u.email.trim().toLowerCase() === email &&
         (u.password === password || u.password.trim() === cleanPass)
     );
-    if (!user) {
+    if (!match) {
       return { ok: false, error: 'البريد الإلكتروني أو كلمة المرور غير صحيحة' };
     }
+    const user = normalizeManagedUser(match);
     if (!user.active) {
       return { ok: false, error: 'الحساب موقوف مؤقتاً من الإدارة' };
     }
     saveLocalState(db);
     return { ok: true, userId: user.id, user, state: projectUserView(db, user.id) };
+  }
+
+  if (url === '/api/auth/sync-session' && body && body.user) {
+    const normalized = normalizeManagedUser(body.user as Partial<ManagedUser>);
+    const idx = (db.users ?? []).findIndex((u) => u.id === normalized.id);
+    if (idx >= 0) db.users![idx] = normalized;
+    else db.users = [normalized, ...(db.users ?? [])];
+    saveLocalState(db);
+    return { ok: true, user: normalized, state: projectUserView(db, normalized.id) };
   }
 
   if (url === '/api/auth/logout') {
@@ -538,6 +637,10 @@ export function executeLocalApi(
     return { ok: true, state: projectUserView(db, uid) };
   }
 
+  if (url === '/api/accounts/switch') {
+    return projectUserView(db, uid) as unknown as Record<string, unknown>;
+  }
+
   if (url === '/api/accounts/trade-status' && body) {
     const user = (db.users ?? []).find((u) => u.id === uid);
     if (user) user.canTrade = Boolean(body.canTrade);
@@ -563,7 +666,7 @@ export function executeLocalApi(
         createdAt: new Date().toISOString(),
         expiresAt: minsFromNow(15),
       };
-      user.frozenEgp = Math.round((user.frozenEgp + amountLocal) * 100) / 100;
+      user.frozenEgp = Math.round(((user.frozenEgp || 0) + amountLocal) * 100) / 100;
       db.deposits.unshift(created);
       saveLocalState(db);
       return { state: projectUserView(db, uid), created };
@@ -573,16 +676,85 @@ export function executeLocalApi(
     const dep = db.deposits.find((d) => d.id === id);
     const user = (db.users ?? []).find((u) => u.id === dep?.userId);
     if (dep && body) {
-      if (body.action === 'confirm') {
+      if (body.action === 'edit_amount' && typeof body.newAmountLocal === 'number' && body.newAmountLocal > 0) {
+        dep.amountLocal = Math.round(body.newAmountLocal);
+        dep.amountUsdt = Math.round((dep.amountLocal / (dep.rate || 49.85)) * 100) / 100;
+      } else if (body.action === 'confirm') {
         dep.status = 'completed';
         dep.confirmedAt = new Date().toISOString();
         if (user) {
-          user.frozenEgp = Math.max(0, Math.round((user.frozenEgp - dep.amountLocal) * 100) / 100);
-          user.balanceEgp = Math.round((user.balanceEgp + dep.amountLocal + dep.incomeUsdt) * 100) / 100;
+          user.frozenEgp = Math.max(0, Math.round(((user.frozenEgp || 0) - dep.amountLocal) * 100) / 100);
+          user.balanceEgp = Math.round(((user.balanceEgp || 0) + dep.amountLocal + dep.incomeUsdt) * 100) / 100;
         }
       } else if (body.action === 'cancel') {
         dep.status = 'cancelled';
-        if (user) user.frozenEgp = Math.max(0, Math.round((user.frozenEgp - dep.amountLocal) * 100) / 100);
+        if (user) user.frozenEgp = Math.max(0, Math.round(((user.frozenEgp || 0) - dep.amountLocal) * 100) / 100);
+      } else if (body.action === 'dispute' && dep.status === 'pending') {
+        dep.status = 'disputed';
+        db.disputes.unshift({
+          id: `dsp_${Date.now()}`,
+          userId: dep.userId,
+          depositId: dep.id,
+          orderId: dep.orderId,
+          accountId: dep.accountId,
+          claimedAmountLocal: dep.amountLocal,
+          originalAmountLocal: dep.amountLocal,
+          amountUsdt: dep.amountUsdt,
+          bankName: dep.bankName,
+          requisiteNumber: dep.requisiteNumber,
+          reason: String(body.reason || 'مراجعة مرجع التحويل البنكي.'),
+          status: 'open',
+          createdAt: new Date().toISOString(),
+          slaMinutesLeft: 45,
+          receiptRef: `REF-${Math.floor(100000 + Math.random() * 900000)}`,
+        });
+      }
+    }
+  } else if (url.startsWith('/api/disputes/')) {
+    const id = url.split('/').pop();
+    const dispute = db.disputes.find((d) => d.id === id);
+    if (dispute && body) {
+      const dep = db.deposits.find((d) => d.id === dispute.depositId);
+      const user = (db.users ?? []).find((u) => u.id === dispute.userId);
+      if (body.action === 'approve') {
+        dispute.status = 'resolved_approve';
+        dispute.resolutionNote = String(body.note || 'تم اعتماد الإيداع.');
+        if (dep) {
+          dep.status = 'completed';
+          dep.confirmedAt = new Date().toISOString();
+          if (user) {
+            user.frozenEgp = Math.max(0, Math.round(((user.frozenEgp || 0) - dep.amountLocal) * 100) / 100);
+            user.balanceEgp = Math.round(((user.balanceEgp || 0) + dep.amountLocal) * 100) / 100;
+          }
+        }
+      } else {
+        dispute.status = 'resolved_reject';
+        dispute.resolutionNote = String(body.note || 'تم رفض النزاع.');
+        if (dep) dep.status = 'cancelled';
+      }
+    }
+  } else if (url.startsWith('/api/withdrawals/') && url.endsWith('/claim')) {
+    const id = url.split('/')[3];
+    const wd = db.withdrawals.find((w) => w.id === id);
+    if (wd) {
+      wd.status = 'accepted';
+      wd.acceptedAt = new Date().toISOString();
+    }
+  } else if (url.startsWith('/api/withdrawals/')) {
+    const id = url.split('/').pop();
+    const wd = db.withdrawals.find((w) => w.id === id);
+    if (wd && body) {
+      if (body.action === 'attach' && Array.isArray(body.files)) {
+        const now = new Date().toISOString();
+        wd.receiptFiles = [
+          ...(wd.receiptFiles || []),
+          ...(body.files as Array<{ name: string; size: string }>).map((f) => ({ ...f, uploadedAt: now })),
+        ];
+      } else if (body.action === 'complete') {
+        wd.status = 'completed';
+        wd.completedAt = new Date().toISOString();
+      } else if (body.action === 'release') {
+        wd.status = 'available';
       }
     }
   } else if (url === '/api/requisites' && method === 'POST' && body && uid) {

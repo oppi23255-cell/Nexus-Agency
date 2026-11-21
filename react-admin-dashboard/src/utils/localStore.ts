@@ -32,28 +32,75 @@ export function createSeedAdminState(): PlatformState {
   };
 }
 
+export function normalizeAdminUser(raw: Partial<ManagedUser>): ManagedUser {
+  const email = String(raw.email || '').trim();
+  const prefix = email.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '') || 'agent';
+  const id = String(raw.id || `usr_${Date.now()}`).trim();
+  const playerId =
+    typeof raw.playerId === 'string' && raw.playerId.trim()
+      ? raw.playerId.trim()
+      : `PL-${id.replace(/\D/g, '').slice(-8).padStart(8, '4')}`;
+  const bal = Number(raw.balanceEgp);
+  const frozen = Number(raw.frozenEgp);
+  return {
+    id,
+    playerId,
+    uuid:
+      typeof raw.uuid === 'string' && raw.uuid.trim()
+        ? raw.uuid.trim()
+        : `01a1a848-${Math.random().toString(16).slice(2, 6)}-4533-a6f9-${Math.random().toString(16).slice(2, 14)}`,
+    username: String(raw.username || `${prefix}_egp`).trim(),
+    displayName: String(raw.displayName || prefix).trim(),
+    email,
+    emailLower: email.toLowerCase(),
+    password: String(raw.password || '').trim(),
+    telegramHandle: String(raw.telegramHandle || `@${prefix}`).trim(),
+    balanceEgp: Number.isFinite(bal) ? bal : 0,
+    frozenEgp: Number.isFinite(frozen) ? frozen : 0,
+    insuranceEgp: raw.insuranceEgp ?? null,
+    canTrade: raw.canTrade !== false,
+    active: raw.active !== false,
+    depositFeePct: Number.isFinite(Number(raw.depositFeePct)) ? Number(raw.depositFeePct) : 3.0,
+    withdrawalFeePct: Number.isFinite(Number(raw.withdrawalFeePct)) ? Number(raw.withdrawalFeePct) : 1.8,
+    referralCode: String(raw.referralCode || `EG-${playerId.replace('PL-', '')}`).trim(),
+    referralRatePct: Number.isFinite(Number(raw.referralRatePct)) ? Number(raw.referralRatePct) : 0.5,
+    twoFactorEnabled: raw.twoFactorEnabled !== false,
+    trc20Address: String(raw.trc20Address || 'TY9xK8mPq7VwRz4nLp3JdXs2kF9aBc7eW1').trim(),
+    createdAt: String(raw.createdAt || new Date().toISOString()),
+    ...(raw.lastSeenAt ? { lastSeenAt: raw.lastSeenAt } : {}),
+  };
+}
+
 export function loadAdminDb(): PlatformState {
+  const seed = createSeedAdminState();
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
-      const parsed = JSON.parse(raw) as PlatformState;
+      const parsed = JSON.parse(raw) as Partial<PlatformState>;
       if (parsed.config && Array.isArray(parsed.users)) {
-        parsed.config.platformName = FIXED_PLATFORM_NAME;
         return {
-          ...createSeedAdminState(),
+          ...seed,
           ...parsed,
           config: {
-            ...createSeedAdminState().config,
+            ...seed.config,
             ...parsed.config,
             platformName: FIXED_PLATFORM_NAME,
           },
+          settings: {
+            ...seed.settings,
+            ...(parsed.settings || {}),
+          },
+          users: parsed.users.map(normalizeAdminUser),
+          onlinePresence: Array.isArray(parsed.onlinePresence) ? parsed.onlinePresence : [],
+          deposits: Array.isArray(parsed.deposits) ? parsed.deposits : [],
+          withdrawals: Array.isArray(parsed.withdrawals) ? parsed.withdrawals : [],
+          messages: Array.isArray(parsed.messages) ? parsed.messages : [],
         };
       }
     }
   } catch {
     // ignore
   }
-  const seed = createSeedAdminState();
   saveAdminDb(seed);
   return seed;
 }
@@ -67,7 +114,8 @@ export function saveAdminDb(db: PlatformState): void {
   }
 }
 
-export function upsertUserInLocalDb(user: ManagedUser): PlatformState {
+export function upsertUserInLocalDb(rawUser: ManagedUser): PlatformState {
+  const user = normalizeAdminUser(rawUser);
   const db = loadAdminDb();
   const list = db.users ?? [];
   const idx = list.findIndex((u) => u.id === user.id);
