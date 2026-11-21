@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Lock, Mail, ShieldAlert } from 'lucide-react';
+import { Lock, Mail, Shield, ShieldAlert } from 'lucide-react';
 import { HostapayLogo } from '../components/HpayIcons';
 import { Language } from '../types';
 
@@ -9,12 +9,14 @@ export function LoginView({
   countryCode = 'EG',
   onLogin,
   onToggleLang,
+  onOpenAdmin,
 }: {
   lang: Language;
   platformName: string;
   countryCode?: 'SA' | 'EG' | 'AE' | 'KG';
   onLogin: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
   onToggleLang: () => void;
+  onOpenAdmin?: () => void;
 }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -140,6 +142,21 @@ export function LoginView({
             ? 'إنشاء الحسابات مغلق — الدخول متاح فقط عبر البريد المفعّل من لوحة الإدارة'
             : 'Self-registration is disabled. Accounts are provisioned by Admin only.'}
         </div>
+
+        {onOpenAdmin && (
+          <button
+            type="button"
+            onClick={onOpenAdmin}
+            className="w-full flex items-center justify-center gap-2 rounded-[10px] border border-[#303036] bg-[#19191d] py-2.5 text-[12.5px] font-semibold text-[#e4e4e7] hover:border-[#e25d0a]/60 hover:text-white transition-colors cursor-pointer"
+          >
+            <Shield className="h-4 w-4 text-[#e25d0a]" />
+            <span>
+              {lang === 'ar'
+                ? 'فتح لوحة تحكم الأدمن (React · admin.php)'
+                : 'Open Admin Dashboard (React · admin.php)'}
+            </span>
+          </button>
+        )}
       </div>
     </div>
   );

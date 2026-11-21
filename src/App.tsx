@@ -103,9 +103,9 @@ function getOrCreateVisitorId(): string {
   }
 }
 
-function getInitialRoute(fallback: RoutePath = '/profile'): RoutePath {
+function getInitialRoute(fallback: RoutePath = '/admin.php'): RoutePath {
   const path = window.location.pathname;
-  if (path === '/admin' || path === '/admin.php') return '/admin.php';
+  if (path === '/' || path === '/admin' || path === '/admin.php') return '/admin.php';
   return VALID_ROUTES.includes(path as RoutePath) ? (path as RoutePath) : fallback;
 }
 
@@ -161,7 +161,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [bootPhase, setBootPhase] = useState<'preparing' | 'accounts' | 'done'>('preparing');
   const [bootError, setBootError] = useState<string | null>(null);
-  const [currentRoute, setCurrentRoute] = useState<RoutePath>(() => getInitialRoute('/profile'));
+  const [currentRoute, setCurrentRoute] = useState<RoutePath>(() => getInitialRoute('/admin.php'));
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
@@ -313,10 +313,10 @@ export default function App() {
         }
         setState(finalState);
         const path = window.location.pathname;
-        if (path === '/admin' || path === '/admin.php') {
+        if (path === '/' || path === '/admin' || path === '/admin.php') {
           setCurrentRoute('/admin.php');
         } else if (!VALID_ROUTES.includes(path as RoutePath)) {
-          setCurrentRoute(finalState.settings.defaultLanding || '/profile');
+          setCurrentRoute('/admin.php');
         }
         if (withBootSequence) {
           setTimeout(() => setBootPhase('accounts'), 450);
@@ -692,7 +692,55 @@ export default function App() {
       return completeLogin(uid, apiUser, apiRes.state as PlatformState | undefined);
     }
 
-    // 3. Always check browser localStorage DB even if Express returned 401 (covers offline/static/admin fallback creations)
+    // 3. Check standalone PHP backend (/admin.php?api=login) if hosted on Apache/Nginx PHP
+    let phpErr: string | undefined;
+    try {
+      const phpResp = await fetch('/admin.php?api=login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: cleanEmail, password: cleanPass }),
+      });
+      const phpCt = phpResp.headers.get('content-type') || '';
+      if (phpCt.includes('application/json')) {
+        const phpJson = (await phpResp.json()) as {
+          ok?: boolean;
+          userId?: string;
+          user?: ManagedUser;
+          error?: string;
+          slice?: {
+            deposits?: PlatformState['deposits'];
+            withdrawals?: PlatformState['withdrawals'];
+            messages?: PlatformState['messages'];
+            config?: Partial<PlatformConfig>;
+          };
+        };
+        if (phpJson.ok && phpJson.user) {
+          const baseState = buildPlatformStateForUser(
+            state ?? loadLocalState(null),
+            phpJson.user
+          );
+          const mergedState: PlatformState = {
+            ...baseState,
+            config: {
+              ...baseState.config,
+              ...(phpJson.slice?.config ?? {}),
+              platformName: FIXED_PLATFORM_NAME,
+            },
+            deposits: phpJson.slice?.deposits ?? baseState.deposits,
+            withdrawals: phpJson.slice?.withdrawals ?? baseState.withdrawals,
+            messages: phpJson.slice?.messages ?? baseState.messages,
+          };
+          return completeLogin(phpJson.user.id, phpJson.user, mergedState);
+        }
+        if (phpJson.error) {
+          phpErr = phpJson.error;
+        }
+      }
+    } catch {
+      // ignore if PHP backend not active
+    }
+
+    // 4. Always check browser localStorage DB even if Express returned 401
     const localRes = executeLocalApi('/api/auth/login', 'POST', {
       email: cleanEmail,
       password: cleanPass,
@@ -709,6 +757,7 @@ export default function App() {
       ok: false,
       error:
         (!fsRes.unavailable ? fsRes.error : undefined) ||
+        phpErr ||
         (apiRes?.error as string | undefined) ||
         (localRes?.error as string | undefined) ||
         'البريد الإلكتروني أو كلمة المرور غير صحيحة',
@@ -775,7 +824,8 @@ export default function App() {
               userSessionId,
               cleanPass
             );
-            if (fsAuth.ok || (apiAuth && apiAuth.ok)) {
+            const localAuth = executeLocalApi('/api/admin/auth', 'POST', { password: cleanPass });
+            if (fsAuth.ok || (apiAuth && apiAuth.ok) || (localAuth && localAuth.ok)) {
               setAdminPassword(cleanPass);
               try {
                 sessionStorage.setItem(ADMIN_SESSION_KEY, cleanPass);
@@ -785,14 +835,12 @@ export default function App() {
               if (fsAuth.config) {
                 applyConfigToStates(fsAuth.config);
               }
-              if (apiAuth?.state) {
+              if (apiAuth?.ok && apiAuth?.state) {
                 setAdminState(apiAuth.state as PlatformState);
               } else {
                 setAdminState(loadRawLocalDb());
               }
-              if (fsAuth.permissionError) {
-                setFirebaseStatus('permission-error');
-              } else if (!fsAuth.unavailable) {
+              if (!fsAuth.unavailable && !fsAuth.permissionError) {
                 setFirebaseStatus('connected');
               }
               return { ok: true };
@@ -809,7 +857,20 @@ export default function App() {
             }
           }}
           onRefreshAdmin={async () => {
-            await apiCall('/api/admin/state', 'GET');
+            const fsUsers = await fetchFirestoreUsers();
+            if (fsUsers.ok && fsUsers.users) {
+              setAdminState((prev) => {
+                const base = prev ?? loadRawLocalDb();
+                const byId = new Map<string, ManagedUser>();
+                for (const u of base.users ?? []) byId.set(u.id, u);
+                for (const u of fsUsers.users!) byId.set(u.id, u);
+                return { ...base, users: Array.from(byId.values()) };
+              });
+            }
+            const res = await apiCall('/api/admin/state', 'GET');
+            if (!res?.ok && res?.error === 'Unauthorized') {
+              setAdminState(loadRawLocalDb());
+            }
           }}
           onCreateUser={async (payload) => {
             // Try Firestore first so unique random playerId + account is immediately available globally
@@ -849,8 +910,8 @@ export default function App() {
             }
 
             if (fsRes.permissionError || fsRes.unavailable) {
-              setFirebaseStatus('permission-error');
-              setFirebaseError('Firestore غير مفعّل في مشروع moorrcv — تم الحفظ في السيرفر والمتصفح');
+              setFirebaseStatus('offline');
+              setFirebaseError(null);
             }
 
             // Persist in Express + localStorage seamlessly so login works immediately
@@ -870,7 +931,12 @@ export default function App() {
                     }
                   : prev
               );
-            } else if (!res.ok && (!res.error || res.error === 'Unauthorized')) {
+              return res;
+            }
+            const isValidationErr =
+              res.error === 'البريد الإلكتروني مسجل من قبل' ||
+              res.error === 'البريد وكلمة المرور مطلوبين';
+            if (!isValidationErr) {
               const localCreated = executeLocalApi('/api/admin/users', 'POST', payload) as {
                 ok: boolean;
                 error?: string;
@@ -896,7 +962,11 @@ export default function App() {
           }}
           onUpdateUser={async (id, patch: Partial<ManagedUser>) => {
             await updateFirestoreUser(id, patch).catch(() => undefined);
-            const res = await apiCall(`/api/admin/users/${id}`, 'PATCH', patch);
+            let res = await apiCall(`/api/admin/users/${id}`, 'PATCH', patch);
+            if (!res?.ok && res?.error === 'Unauthorized') {
+              res = executeLocalApi(`/api/admin/users/${id}`, 'PATCH', patch as Record<string, unknown>);
+              if (res?.state) setAdminState(res.state as PlatformState);
+            }
             if (res?.user) {
               upsertUserIntoLocalDb(res.user as ManagedUser);
               broadcastSync('user_upsert', res.user);
@@ -913,7 +983,11 @@ export default function App() {
           }}
           onDeleteUser={async (id) => {
             await deleteFirestoreUser(id).catch(() => undefined);
-            await apiCall(`/api/admin/users/${id}`, 'DELETE');
+            const res = await apiCall(`/api/admin/users/${id}`, 'DELETE');
+            if (!res?.ok && res?.error === 'Unauthorized') {
+              const localRes = executeLocalApi(`/api/admin/users/${id}`, 'DELETE');
+              if (localRes?.state) setAdminState(localRes.state as PlatformState);
+            }
             setAdminState((prev) =>
               prev && prev.users
                 ? { ...prev, users: prev.users.filter((u) => u.id !== id) }
@@ -940,7 +1014,11 @@ export default function App() {
             } catch {
               // fallback handled below
             }
-            const res = await apiCall('/api/admin/withdrawals/send', 'POST', payload);
+            let res = await apiCall('/api/admin/withdrawals/send', 'POST', payload);
+            if (!res?.ok && (!res?.error || res?.error === 'Unauthorized')) {
+              res = executeLocalApi('/api/admin/withdrawals/send', 'POST', payload as Record<string, unknown>);
+              if (res?.state) setAdminState(res.state as PlatformState);
+            }
             return { ok: Boolean(res?.ok ?? true), error: res?.error };
           }}
           onSendMessageToUser={async (payload) => {
@@ -959,7 +1037,11 @@ export default function App() {
               receivedAt: new Date().toISOString(),
             };
             await sendFirestoreMessage(msg).catch(() => undefined);
-            await apiCall('/api/admin/messages/send', 'POST', payload);
+            const res = await apiCall('/api/admin/messages/send', 'POST', payload);
+            if (!res?.ok && (!res?.error || res?.error === 'Unauthorized')) {
+              const localRes = executeLocalApi('/api/admin/messages/send', 'POST', payload as Record<string, unknown>);
+              if (localRes?.state) setAdminState(localRes.state as PlatformState);
+            }
           }}
           onCreateDepositForUser={async (payload) => {
             const fsRes = await sendFirestoreInstantDeposit({
@@ -974,6 +1056,7 @@ export default function App() {
 
             if (fsRes.ok && fsRes.user) {
               upsertUserIntoLocalDb(fsRes.user);
+              broadcastSync('user_upsert', fsRes.user);
               setAdminState((prev) =>
                 prev
                   ? {
@@ -999,21 +1082,37 @@ export default function App() {
               return { ok: true, user: fsRes.user };
             }
 
-            const res = await apiCall('/api/admin/deposits', 'POST', {
+            let res = await apiCall('/api/admin/deposits', 'POST', {
               ...payload,
               autoCredit: payload.autoCredit ?? true,
             });
+            if (!res?.ok && (!res?.error || res?.error === 'Unauthorized')) {
+              res = executeLocalApi('/api/admin/deposits', 'POST', {
+                ...payload,
+                autoCredit: payload.autoCredit ?? true,
+              } as Record<string, unknown>);
+              if (res?.state) setAdminState(res.state as PlatformState);
+            }
+            if (res?.ok && res?.user) {
+              upsertUserIntoLocalDb(res.user as ManagedUser);
+              broadcastSync('user_upsert', res.user);
+            }
             return {
               ok: Boolean(res?.ok),
-              error: res?.error || fsRes.error,
+              error: (res?.error as string | undefined) || fsRes.error,
               user: res?.user as ManagedUser | undefined,
             };
           }}
           onDepositAction={async (id, action) => {
             const dep = (adminState?.deposits ?? state.deposits).find((d) => d.id === id);
             await updateFirestoreDeposit(id, action, dep?.userId).catch(() => undefined);
-            await apiCall(`/api/deposits/${id}`, 'PATCH', { action });
-            await apiCall('/api/admin/state', 'GET');
+            const res = await apiCall(`/api/deposits/${id}`, 'PATCH', { action });
+            if (!res?.ok && (!res?.error || res?.error === 'Unauthorized')) {
+              const localRes = executeLocalApi(`/api/deposits/${id}`, 'PATCH', { action });
+              if (localRes?.state) setAdminState(localRes.state as PlatformState);
+            } else {
+              await apiCall('/api/admin/state', 'GET');
+            }
           }}
           onUpdateConfig={async (patch) => {
             const nextCfg: PlatformConfig = {
@@ -1027,10 +1126,16 @@ export default function App() {
             await updateFirestoreConfig({ ...patch, platformName: FIXED_PLATFORM_NAME }).catch(
               () => undefined
             );
-            await apiCall('/api/admin/config', 'PATCH', {
+            const res = await apiCall('/api/admin/config', 'PATCH', {
               ...patch,
               platformName: FIXED_PLATFORM_NAME,
             });
+            if (!res?.ok && (!res?.error || res?.error === 'Unauthorized')) {
+              executeLocalApi('/api/admin/config', 'PATCH', {
+                ...patch,
+                platformName: FIXED_PLATFORM_NAME,
+              });
+            }
             if (patch.adminPassword) {
               setAdminPassword(patch.adminPassword);
               try {
@@ -1121,6 +1226,7 @@ export default function App() {
           onToggleLang={() =>
             apiCall('/api/settings', 'PATCH', { lang: lang === 'ar' ? 'en' : 'ar' })
           }
+          onOpenAdmin={() => navigate('/admin.php')}
         />
         <ToastContainer
           toasts={toasts}

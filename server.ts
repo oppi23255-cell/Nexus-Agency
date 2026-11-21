@@ -1059,9 +1059,25 @@ async function startServer() {
       server: { middlewareMode: true },
       appType: 'spa',
     });
+
+    // Prevent Vite static middleware from serving raw root /admin.php source text
+    app.get(['/admin', '/admin.php'], async (req, res, next) => {
+      try {
+        const indexPath = path.resolve(__dirname, 'index.html');
+        let html = fs.readFileSync(indexPath, 'utf8');
+        html = await vite.transformIndexHtml(req.originalUrl, html);
+        res.status(200).set({ 'Content-Type': 'text/html' }).end(html);
+      } catch (err) {
+        next(err);
+      }
+    });
+
     app.use(vite.middlewares);
   } else {
     const distPath = path.resolve(__dirname, 'dist');
+    app.get(['/admin', '/admin.php'], (_req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
     app.use(express.static(distPath));
     app.get('*', (_req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));

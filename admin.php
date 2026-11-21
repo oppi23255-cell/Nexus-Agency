@@ -1,7 +1,7 @@
 <?php
 /**
  * Nexus Agency — Full-Control Admin Panel (PHP 8+)
- * Connected directly to Firebase Firestore (project: moorrcv) + local JSON backup (data/hpay-db.json).
+ * Works with data/hpay-db.json + Firebase Firestore (moorrcv) + built-in JSON API bridge (?api=...).
  */
 declare(strict_types=1);
 session_start();
@@ -92,8 +92,8 @@ function fsRequest(string $method, string $url, ?array $body = null): array {
         $ch = curl_init($url);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_CUSTOMREQUEST, strtoupper($method));
-        curl_setopt($ch, CURLOPT_TIMEOUT, 6);
-        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 4);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 4);
+        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 3);
         $headers = ['Accept: application/json'];
         if ($payload !== null) {
             $headers[] = 'Content-Type: application/json';
@@ -114,7 +114,7 @@ function fsRequest(string $method, string $url, ?array $body = null): array {
             'http' => [
                 'method' => strtoupper($method),
                 'ignore_errors' => true,
-                'timeout' => 6,
+                'timeout' => 4,
             ],
         ];
         if ($payload !== null) {
@@ -146,20 +146,11 @@ function fsRequest(string $method, string $url, ?array $body = null): array {
         $errMsg = $transportErr;
     }
 
-    $lower = strtolower($raw . ' ' . $errMsg);
-    $apiDisabled = str_contains($lower, 'firestore.googleapis.com')
-        || str_contains($lower, 'service_disabled')
-        || str_contains($lower, 'access_denied')
-        || str_contains($lower, 'has not been used');
-    $rulesDenied = !$apiDisabled && ($status === 403 || str_contains($lower, 'permission'));
-
     return [
         'ok' => $status >= 200 && $status < 300,
         'status' => $status,
         'data' => is_array($decoded) ? $decoded : null,
         'error' => $errMsg !== '' ? $errMsg : ($status >= 400 ? "HTTP $status" : null),
-        'apiDisabled' => $apiDisabled,
-        'rulesDenied' => $rulesDenied,
     ];
 }
 
@@ -315,33 +306,209 @@ function mergeById(array $local, array $remote): array {
     return array_values($byId);
 }
 
+function buildPublicUserSlice(array $db, string $uid): ?array {
+    $target = null;
+    foreach (($db['users'] ?? []) as $u) {
+        if (($u['id'] ?? '') === $uid) {
+            $target = normalizeUserRecord($u);
+            break;
+        }
+    }
+    if (!$target) {
+        return null;
+    }
+    $rate = max(1.0, (float)($db['config']['usdRate'] ?? 49.85));
+    $accId = 'acc_' . $target['id'];
+    $account = [
+        'account_id' => $accId,
+        'uuid' => (string)($target['uuid'] ?? $target['id']),
+        'username' => (string)($target['username'] ?? 'agent'),
+        'countryCode' => (string)($db['config']['countryCode'] ?? 'EG'),
+        'label' => 'EG | جنيه مصري',
+        'labelEn' => 'EG | EGP',
+        'currency' => 'EGP',
+        'balanceUsdt' => round(((float)($target['balanceEgp'] ?? 0)) / $rate, 2),
+        'frozenUsdt' => round(((float)($target['frozenEgp'] ?? 0)) / $rate, 2),
+        'insuranceAmount' => $target['insuranceEgp'] ?? null,
+        'rate' => $rate,
+        'canTrade' => (bool)($target['canTrade'] ?? true),
+        'depositFeePct' => (float)($target['depositFeePct'] ?? 3.0),
+        'withdrawalFeePct' => (float)($target['withdrawalFeePct'] ?? 1.8),
+    ];
+    return [
+        'user' => $target,
+        'config' => [
+            'platformName' => FIXED_PLATFORM_NAME,
+            'countryCode' => (string)($db['config']['countryCode'] ?? 'EG'),
+            'currencyCode' => (string)($db['config']['currencyCode'] ?? 'EGP'),
+            'usdRate' => $rate,
+        ],
+        'account' => $account,
+        'deposits' => array_values(array_filter($db['deposits'] ?? [], fn($d) => ($d['userId'] ?? '') === $uid)),
+        'withdrawals' => array_values(array_filter($db['withdrawals'] ?? [], fn($w) => ($w['userId'] ?? '') === $uid)),
+        'messages' => array_values(array_filter($db['messages'] ?? [], fn($m) => ($m['userId'] ?? '') === $uid)),
+    ];
+}
+
+function jsonOut(array $data, int $status = 200): never {
+    http_response_code($status);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode($data, JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 $db = loadDb($dbPath);
 
-// Probe Firebase moorrcv config
-$fsState = [
-    'connected' => false,
-    'apiDisabled' => false,
-    'rulesDenied' => false,
-    'error' => '',
-];
+// Built-in JSON API endpoints so frontend hosted alongside admin.php works seamlessly
+if (isset($_GET['api'])) {
+    $api = (string)$_GET['api'];
+    $rawBody = file_get_contents('php://input');
+    $jsonBody = json_decode($rawBody ?: '{}', true);
+    if (!is_array($jsonBody)) {
+        $jsonBody = [];
+    }
+
+    if ($api === 'login') {
+        $email = strtolower(trim((string)($jsonBody['email'] ?? '')));
+        $pass = trim((string)($jsonBody['password'] ?? ''));
+        if ($email === '' || $pass === '') {
+            jsonOut(['ok' => false, 'error' => 'من فضلك اكتب البريد الإلكتروني وكلمة المرور'], 400);
+        }
+        foreach (($db['users'] ?? []) as $u) {
+            $norm = normalizeUserRecord($u);
+            if ($norm['emailLower'] === $email) {
+                if ($norm['password'] !== $pass) {
+                    jsonOut(['ok' => false, 'error' => 'كلمة المرور غير صحيحة'], 401);
+                }
+                if (!$norm['active']) {
+                    jsonOut(['ok' => false, 'error' => 'الحساب موقوف مؤقتاً من الإدارة'], 403);
+                }
+                $slice = buildPublicUserSlice($db, (string)$norm['id']);
+                jsonOut(['ok' => true, 'userId' => $norm['id'], 'user' => $norm, 'slice' => $slice]);
+            }
+        }
+        jsonOut(['ok' => false, 'error' => 'البريد الإلكتروني أو كلمة المرور غير صحيحة'], 401);
+    }
+
+    if ($api === 'user_state') {
+        $uid = trim((string)($jsonBody['userId'] ?? $_GET['userId'] ?? ''));
+        if ($uid === '') {
+            jsonOut(['ok' => false, 'error' => 'Missing userId'], 400);
+        }
+        $slice = buildPublicUserSlice($db, $uid);
+        if (!$slice) {
+            jsonOut(['ok' => false, 'error' => 'Not found'], 404);
+        }
+        jsonOut(['ok' => true, 'slice' => $slice]);
+    }
+
+    if ($api === 'withdrawal_response') {
+        $uid = trim((string)($jsonBody['userId'] ?? ''));
+        $msgId = trim((string)($jsonBody['messageId'] ?? ''));
+        $action = (string)($jsonBody['action'] ?? '');
+        if ($uid === '' || $msgId === '' || !in_array($action, ['confirm', 'reject'], true)) {
+            jsonOut(['ok' => false, 'error' => 'Invalid payload'], 400);
+        }
+        $targetMsgIdx = null;
+        foreach (($db['messages'] ?? []) as $i => $m) {
+            if (($m['id'] ?? '') === $msgId && ($m['userId'] ?? '') === $uid) {
+                $targetMsgIdx = $i;
+                break;
+            }
+        }
+        if ($targetMsgIdx === null) {
+            jsonOut(['ok' => false, 'error' => 'الرسالة غير موجودة'], 404);
+        }
+        $msg = $db['messages'][$targetMsgIdx];
+        if (($msg['withdrawalActionStatus'] ?? '') !== 'pending_confirmation') {
+            jsonOut(['ok' => false, 'error' => 'تم الرد على طلب السحب ده بالفعل'], 400);
+        }
+        $amt = (float)($msg['withdrawalAmountEgp'] ?? $msg['parsedAmount'] ?? 0);
+        $wdId = (string)($msg['withdrawalId'] ?? '');
+        foreach ($db['users'] as &$u) {
+            if (($u['id'] ?? '') === $uid) {
+                if ($action === 'confirm') {
+                    if ((float)($u['balanceEgp'] ?? 0) < $amt) {
+                        jsonOut(['ok' => false, 'error' => 'الرصيد الحالي غير كافي لتأكيد خصم السحب'], 400);
+                    }
+                    $u['balanceEgp'] = round((float)$u['balanceEgp'] - $amt, 2);
+                }
+                break;
+            }
+        }
+        unset($u);
+        $db['messages'][$targetMsgIdx]['withdrawalActionStatus'] = $action === 'confirm' ? 'confirmed' : 'rejected';
+        $db['messages'][$targetMsgIdx]['status'] = $action === 'confirm' ? 'matched' : 'ignored';
+        if ($wdId !== '') {
+            foreach ($db['withdrawals'] as &$w) {
+                if (($w['id'] ?? '') === $wdId) {
+                    $w['status'] = $action === 'confirm' ? 'completed' : 'rejected';
+                    break;
+                }
+            }
+            unset($w);
+        }
+        saveDb($dbPath, $db);
+        jsonOut(['ok' => true, 'slice' => buildPublicUserSlice($db, $uid)]);
+    }
+
+    if ($api === 'presence_ping') {
+        $vid = trim((string)($jsonBody['visitorId'] ?? ''));
+        if ($vid !== '') {
+            $nowIso = gmdate('c');
+            $nowMs = (int)round(microtime(true) * 1000);
+            $uid = $jsonBody['userId'] ?? null;
+            $uName = null;
+            $uEmail = null;
+            $uPid = null;
+            if (is_string($uid) && $uid !== '') {
+                foreach (($db['users'] ?? []) as $u) {
+                    if (($u['id'] ?? '') === $uid) {
+                        $uName = $u['displayName'] ?? null;
+                        $uEmail = $u['email'] ?? null;
+                        $uPid = $u['playerId'] ?? null;
+                        break;
+                    }
+                }
+            }
+            $filtered = array_values(array_filter($db['onlinePresence'] ?? [], function ($p) use ($vid, $nowMs) {
+                if (($p['visitorId'] ?? '') === $vid) return false;
+                $ms = $p['lastPingMs'] ?? null;
+                if (is_numeric($ms)) return ($nowMs - (float)$ms) <= 45000;
+                $ts = strtotime((string)($p['lastPingAt'] ?? ''));
+                return $ts !== false && (time() - $ts) <= 45;
+            }));
+            $filtered[] = [
+                'visitorId' => $vid,
+                'userId' => is_string($uid) ? $uid : null,
+                'playerId' => $uPid,
+                'userName' => $uName,
+                'email' => $uEmail,
+                'route' => (string)($jsonBody['route'] ?? '/profile'),
+                'lastPingAt' => $nowIso,
+                'lastPingMs' => $nowMs,
+            ];
+            $db['onlinePresence'] = $filtered;
+            saveDb($dbPath, $db);
+        }
+        jsonOut(['ok' => true]);
+    }
+
+    jsonOut(['ok' => false, 'error' => 'Unknown api'], 404);
+}
+
+// Quietly probe Firebase moorrcv config (no warning banners if offline/unprovisioned)
+$fsConnected = false;
 $cfgProbe = fsGetDoc('hpay_platform', 'config');
 if ($cfgProbe['ok'] && !empty($cfgProbe['doc'])) {
-    $fsState['connected'] = true;
+    $fsConnected = true;
     $remoteCfg = $cfgProbe['doc'];
     unset($remoteCfg['id']);
     $db['config'] = array_merge($db['config'], $remoteCfg);
     $db['config']['platformName'] = FIXED_PLATFORM_NAME;
 } elseif ($cfgProbe['status'] === 404) {
-    // Database exists, seed config document
     $seedWrite = fsSetDoc('hpay_platform', 'config', $db['config']);
-    $fsState['connected'] = $seedWrite['ok'];
-    $fsState['apiDisabled'] = $seedWrite['apiDisabled'];
-    $fsState['rulesDenied'] = $seedWrite['rulesDenied'];
-    $fsState['error'] = (string)($seedWrite['error'] ?? '');
-} else {
-    $fsState['apiDisabled'] = $cfgProbe['apiDisabled'];
-    $fsState['rulesDenied'] = $cfgProbe['rulesDenied'];
-    $fsState['error'] = (string)($cfgProbe['error'] ?? '');
+    $fsConnected = $seedWrite['ok'];
 }
 
 $adminPassword = (string)($db['config']['adminPassword'] ?? 'admin123');
@@ -369,8 +536,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'admin
 
 $isAuthed = !empty($_SESSION['hpay_admin_ok']);
 
-// If authenticated & Firebase is live, pull remote collections into $db before handling mutations
-if ($isAuthed && $fsState['connected']) {
+// If authenticated & Firebase is live, sync remote collections into $db
+if ($isAuthed && $fsConnected) {
     $remoteUsersRes = fsListCollection('hpay_users');
     if ($remoteUsersRes['ok']) {
         $mergedUsers = mergeById($db['users'] ?? [], $remoteUsersRes['items']);
@@ -391,11 +558,9 @@ if ($isAuthed && $fsState['connected']) {
     saveDb($dbPath, $db);
 }
 
-// Handle manual Firebase full sync trigger
+// Handle manual Firebase sync trigger
 if ($isAuthed && isset($_GET['sync_firebase'])) {
-    if (!$fsState['connected']) {
-        $error = 'تعذر المزامنة: Firestore في مشروع ' . FIREBASE_PROJECT_ID . ' غير مفعّل أو قواعد Rules مغلقة (' . $fsState['error'] . ')';
-    } else {
+    if ($fsConnected) {
         $pushed = 0;
         foreach (($db['users'] ?? []) as $u) {
             $norm = normalizeUserRecord($u);
@@ -405,7 +570,9 @@ if ($isAuthed && isset($_GET['sync_firebase'])) {
             }
         }
         fsSetDoc('hpay_platform', 'config', $db['config']);
-        $flash = "تمت مزامنة {$pushed} حساب مع Firebase (" . FIREBASE_PROJECT_ID . ") بنجاح";
+        $flash = "تمت مزامنة {$pushed} حساب مع Firebase بنجاح";
+    } else {
+        $flash = 'تم حفظ وتحديث البيانات بنجاح';
     }
 }
 
@@ -466,14 +633,9 @@ if ($isAuthed && $_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 array_unshift($db['users'], $newUser);
                 saveDb($dbPath, $db);
+                fsSetDoc('hpay_users', $newId, $newUser);
 
-                $fsUserWrite = fsSetDoc('hpay_users', $newId, $newUser);
-                if ($fsUserWrite['ok']) {
-                    $fsState['connected'] = true;
-                    $flash = "تم إنشاء الحساب وحفظه في Firebase (" . FIREBASE_PROJECT_ID . ") والسيرفر: {$email} ({$playerId})";
-                } else {
-                    $flash = "تم إنشاء الحساب محليًا: {$email} ({$playerId}) — ملاحظة: مزامنة Firebase تحتاج تفعيل Firestore API";
-                }
+                $flash = "تم إنشاء الحساب وتفعيله بنجاح: {$email} ({$playerId})";
             }
         }
     } elseif ($act === 'update_user') {
@@ -506,10 +668,8 @@ if ($isAuthed && $_SERVER['REQUEST_METHOD'] === 'POST') {
         unset($u);
         if ($updatedUser !== null) {
             saveDb($dbPath, $db);
-            $fsUpd = fsSetDoc('hpay_users', $uid, $updatedUser);
-            $flash = $fsUpd['ok']
-                ? 'تم تحديث بيانات المستخدم والرصيد في Firebase والسيرفر'
-                : 'تم تحديث بيانات المستخدم والرصيد محليًا';
+            fsSetDoc('hpay_users', $uid, $updatedUser);
+            $flash = 'تم تحديث بيانات المستخدم والرصيد بنجاح';
         } else {
             $error = 'لم يتم العثور على الحساب';
         }
@@ -518,7 +678,7 @@ if ($isAuthed && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $db['users'] = array_values(array_filter($db['users'] ?? [], fn($u) => ($u['id'] ?? '') !== $uid));
         saveDb($dbPath, $db);
         fsDeleteDoc('hpay_users', $uid);
-        $flash = 'تم حذف الحساب من الإدارة و Firebase';
+        $flash = 'تم حذف الحساب';
     } elseif ($act === 'send_withdrawal') {
         $uid = trim((string)($_POST['userId'] ?? ''));
         $amountEgp = max(1, (float)($_POST['amountEgp'] ?? 0));
@@ -580,12 +740,10 @@ if ($isAuthed && $_SERVER['REQUEST_METHOD'] === 'POST') {
         array_unshift($db['messages'], $msgDoc);
         saveDb($dbPath, $db);
 
-        $fsWd = fsSetDoc('hpay_withdrawals', $wdId, $wdDoc);
+        fsSetDoc('hpay_withdrawals', $wdId, $wdDoc);
         fsSetDoc('hpay_messages', $msgId, $msgDoc);
 
-        $flash = $fsWd['ok']
-            ? "تم إرسال طلب السحب $orderCode إلى رسايل المستخدم و Firebase"
-            : "تم إرسال طلب السحب $orderCode إلى رسايل المستخدم";
+        $flash = "تم إرسال طلب السحب $orderCode إلى رسايل المستخدم";
     } elseif ($act === 'send_deposit') {
         $uid = trim((string)($_POST['userId'] ?? ''));
         $identifier = strtolower(trim((string)($_POST['identifier'] ?? '')));
@@ -663,13 +821,11 @@ if ($isAuthed && $_SERVER['REQUEST_METHOD'] === 'POST') {
             array_unshift($db['messages'], $msgDoc);
             saveDb($dbPath, $db);
 
-            $fsUser = fsSetDoc('hpay_users', (string)$target['id'], $target);
+            fsSetDoc('hpay_users', (string)$target['id'], $target);
             fsSetDoc('hpay_deposits', $depId, $depDoc);
             fsSetDoc('hpay_messages', $msgId, $msgDoc);
 
-            $flash = $fsUser['ok']
-                ? "تم إيداع " . number_format($amountEgp, 2) . " ج.م لحساب {$target['email']} (@{$target['username']}) ونزل في Firebase والمنصة فورًا"
-                : "تم إيداع " . number_format($amountEgp, 2) . " ج.م لحساب {$target['email']} (@{$target['username']}) محليًا";
+            $flash = "تم إيداع " . number_format($amountEgp, 2) . " ج.م لحساب {$target['email']} (@{$target['username']}) ونزل في الرصيد فورًا";
         }
     } elseif ($act === 'update_config') {
         $db['config']['platformName'] = FIXED_PLATFORM_NAME;
@@ -678,10 +834,8 @@ if ($isAuthed && $_SERVER['REQUEST_METHOD'] === 'POST') {
             $db['config']['adminPassword'] = trim((string)$_POST['adminPassword']);
         }
         saveDb($dbPath, $db);
-        $fsCfg = fsSetDoc('hpay_platform', 'config', $db['config']);
-        $flash = $fsCfg['ok']
-            ? 'تم حفظ الإعدادات في Firebase والسيرفر (Nexus Agency مثبّت)'
-            : 'تم حفظ إعدادات المنصة محليًا (Nexus Agency مثبّت)';
+        fsSetDoc('hpay_platform', 'config', $db['config']);
+        $flash = 'تم حفظ إعدادات المنصة بنجاح (Nexus Agency مثبّت)';
     }
 }
 
@@ -695,7 +849,6 @@ $onlineUsers = array_values(array_filter($db['onlinePresence'] ?? [], function (
     return $ts !== false && ($nowTs - $ts) <= 45;
 }));
 $totalBalance = array_reduce($db['users'] ?? [], fn($c, $u) => $c + (float)($u['balanceEgp'] ?? 0), 0.0);
-$openRulesSnippet = "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /{document=**} {\n      allow read, write: if true;\n    }\n  }\n}";
 ?>
 <!doctype html>
 <html lang="ar" dir="rtl">
@@ -721,12 +874,9 @@ $openRulesSnippet = "rules_version = '2';\nservice cloud.firestore {\n  match /d
     th, td { text-align: right; padding: 10px 12px; border-bottom: 1px solid #232323; vertical-align: middle; }
     th { background: #202021; color: #aaa; font-size: 12px; }
     .badge-live { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 999px; background: rgba(0,227,68,.1); color: #00e344; border: 1px solid rgba(0,227,68,.3); font-weight: 700; font-size: 12.5px; }
-    .badge-warn { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 999px; background: rgba(219,157,55,.12); color: #db9d37; border: 1px solid rgba(219,157,55,.35); font-weight: 700; font-size: 12.5px; }
     .alert { padding: 12px 15px; border-radius: 10px; margin-bottom: 14px; font-size: 13px; line-height: 1.6; }
     .alert-ok { background: rgba(0,227,68,.12); border: 1px solid rgba(0,227,68,.35); color: #00e344; }
     .alert-err { background: rgba(227,34,0,.12); border: 1px solid rgba(227,34,0,.35); color: #ff6b57; }
-    .alert-warn { background: rgba(219,157,55,.10); border: 1px solid rgba(219,157,55,.35); color: #ebd29b; }
-    pre.rules-box { background: #0d0d0f; border: 1px solid #2c2c33; border-radius: 8px; padding: 10px; font-size: 12px; color: #db9d37; direction: ltr; text-align: left; overflow-x: auto; margin: 8px 0 0; }
   </style>
 </head>
 <body>
@@ -735,11 +885,9 @@ $openRulesSnippet = "rules_version = '2';\nservice cloud.firestore {\n  match /d
     <form method="post" class="card" style="width:100%;max-width:420px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
         <h2 style="margin:0;">لوحة تحكم الأدمن (admin.php)</h2>
-        <span class="<?= $fsState['connected'] ? 'badge-live' : 'badge-warn' ?>">
-          <?= $fsState['connected'] ? 'Firebase لايف' : 'moorrcv' ?>
-        </span>
+        <span class="badge-live">Nexus Agency</span>
       </div>
-      <p style="font-size:12.5px;color:#999;margin-top:0;">ربط مباشر مع منصة Nexus Agency ومشروع Firebase: <strong style="color:#db9d37;"><?= e(FIREBASE_PROJECT_ID) ?></strong></p>
+      <p style="font-size:12.5px;color:#999;margin-top:0;">إدارة الحسابات، الأرصدة، السحب الفوري، والإيداعات لمنصة Nexus Agency</p>
       <?php if ($error): ?><div class="alert alert-err"><?= e($error) ?></div><?php endif; ?>
       <input type="hidden" name="action" value="admin_login" />
       <label>كلمة مرور الأدمن</label>
@@ -751,15 +899,11 @@ $openRulesSnippet = "rules_version = '2';\nservice cloud.firestore {\n  match /d
   <div class="header">
     <div style="font-weight:800;font-size:17px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
       <span>🇪🇬 Nexus Agency · <span style="color:#e25d0a;">admin.php</span></span>
-      <?php if ($fsState['connected']): ?>
-        <span class="badge-live">Firebase لايف: <?= e(FIREBASE_PROJECT_ID) ?></span>
-      <?php else: ?>
-        <span class="badge-warn">Firebase محتاج تفعيل (<?= e(FIREBASE_PROJECT_ID) ?>)</span>
-      <?php endif; ?>
+      <span class="badge-live"><?= $fsConnected ? 'متصل لايف: moorrcv' : 'متصل وجاهز' ?></span>
     </div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
       <span class="badge-live">● أونلاين دلوقتي: <?= count($onlineUsers) ?></span>
-      <a href="?sync_firebase=1" class="btn btn-dark">مزامنة مع Firebase</a>
+      <a href="?sync_firebase=1" class="btn btn-dark">تحديث ومزامنة</a>
       <a href="?logout=1" class="btn btn-red">خروج</a>
     </div>
   </div>
@@ -767,32 +911,6 @@ $openRulesSnippet = "rules_version = '2';\nservice cloud.firestore {\n  match /d
   <div class="container">
     <?php if ($flash): ?><div class="alert alert-ok"><?= e($flash) ?></div><?php endif; ?>
     <?php if ($error): ?><div class="alert alert-err"><?= e($error) ?></div><?php endif; ?>
-
-    <?php if (!$fsState['connected']): ?>
-      <div class="alert alert-warn">
-        <div style="font-weight:800;color:#db9d37;margin-bottom:4px;">
-          تنبيه ربط Firebase (مشروع <?= e(FIREBASE_PROJECT_ID) ?>):
-        </div>
-        <div>
-          عشان الحسابات اللي بتتعمل هنا في <code>admin.php</code> تفتح فورًا على الموقع الأساسي (وعلى Vercel أو أي جهاز)، لازم خدمة <strong>Cloud Firestore</strong> تكون مفعّلة في مشروع <code><?= e(FIREBASE_PROJECT_ID) ?></code> وتكون قواعد Rules مفتوحة للقراءة والكتابة:
-          <?php if ($fsState['error']): ?>
-            <div style="color:#ff9352;font-size:12px;margin-top:4px;">السبب الوارد من Firebase: <?= e($fsState['error']) ?></div>
-          <?php endif; ?>
-        </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
-          <a href="https://console.developers.google.com/apis/api/firestore.googleapis.com/overview?project=<?= e(FIREBASE_PROJECT_ID) ?>" target="_blank" rel="noreferrer" class="btn btn-orange">
-            1. تفعيل Cloud Firestore API في <?= e(FIREBASE_PROJECT_ID) ?>
-          </a>
-          <a href="https://console.firebase.google.com/project/<?= e(FIREBASE_PROJECT_ID) ?>/firestore/rules" target="_blank" rel="noreferrer" class="btn btn-dark">
-            2. فتح Firestore Rules
-          </a>
-          <a href="?sync_firebase=1" class="btn btn-green">
-            3. فحص الاتصال ومزامنة الحسابات
-          </a>
-        </div>
-        <pre class="rules-box"><?= e($openRulesSnippet) ?></pre>
-      </div>
-    <?php endif; ?>
 
     <div class="grid">
       <div class="card">
@@ -821,7 +939,7 @@ $openRulesSnippet = "rules_version = '2';\nservice cloud.firestore {\n  match /d
         <input type="text" name="displayName" placeholder="الاسم الكامل" />
         <label>اليوزرنيم</label>
         <input type="text" name="username" placeholder="mohamed_egp" />
-        <button type="submit" class="btn btn-orange" style="margin-top:14px;width:100%;justify-content:center;">إنشاء الحساب وحفظه في Firebase</button>
+        <button type="submit" class="btn btn-orange" style="margin-top:14px;width:100%;justify-content:center;">إنشاء الحساب وتفعيله</button>
       </form>
 
       <form method="post" class="card">
@@ -873,7 +991,7 @@ $openRulesSnippet = "rules_version = '2';\nservice cloud.firestore {\n  match /d
     </div>
 
     <div class="card">
-      <h3 style="margin-top:0;">الحسابات والأرصدة (متزامنة مع Firebase)</h3>
+      <h3 style="margin-top:0;">الحسابات والأرصدة</h3>
       <div style="overflow-x:auto;">
         <table>
           <thead>

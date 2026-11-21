@@ -1,7 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
-  AlertTriangle,
   ArrowDownLeft,
   ArrowUpRight,
   Check,
@@ -11,7 +10,6 @@ import {
   Database,
   Download,
   Edit3,
-  ExternalLink,
   Eye,
   EyeOff,
   Globe,
@@ -99,15 +97,6 @@ interface AdminDashboardPageProps {
   onNotify: (type: 'success' | 'error' | 'warning', title: string, message?: string) => void;
 }
 
-const FIRESTORE_OPEN_RULES = `rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    match /{document=**} {
-      allow read, write: if true;
-    }
-  }
-}`;
-
 const PAYMENT_METHOD_CHIPS = [
   'فودافون كاش',
   'إنستا باي',
@@ -131,7 +120,6 @@ export function AdminDashboardPage({
   state,
   adminAuthed,
   firebaseStatus = 'connected',
-  firebaseError,
   onAdminLogin,
   onAdminLogout,
   onRefreshAdmin,
@@ -145,19 +133,19 @@ export function AdminDashboardPage({
   onUpdateConfig,
   onImpersonateUser,
   onDownloadPhp,
-  onRetryFirebase,
   onGoToApp,
   onNotify,
 }: AdminDashboardPageProps) {
   const [adminPassInput, setAdminPassInput] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loggingIn, setLoggingIn] = useState(false);
-  const [retryingFirebase, setRetryingFirebase] = useState(false);
   const [tab, setTab] = useState<'users' | 'withdrawals' | 'orders' | 'settings'>('users');
   const [userSearch, setUserSearch] = useState('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [revealedPassIds, setRevealedPassIds] = useState<Record<string, boolean>>({});
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  const emailInputRef = useRef<HTMLInputElement | null>(null);
 
   // Create user state
   const [newEmail, setNewEmail] = useState('');
@@ -165,6 +153,10 @@ export function AdminDashboardPage({
   const [newDisplayName, setNewDisplayName] = useState('');
   const [newUsername, setNewUsername] = useState('');
   const [creatingUser, setCreatingUser] = useState(false);
+  const [createUserFeedback, setCreateUserFeedback] = useState<{
+    type: 'success' | 'error';
+    text: string;
+  } | null>(null);
 
   // Edit user modal
   const [editingUser, setEditingUser] = useState<ManagedUser | null>(null);
@@ -182,26 +174,45 @@ export function AdminDashboardPage({
   const [wdRecipient, setWdRecipient] = useState('');
   const [wdNote, setWdNote] = useState('');
   const [sendingWd, setSendingWd] = useState(false);
+  const [wdFeedback, setWdFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // Instant Deposit request form (next to withdrawal)
+  // Instant Deposit request form (next to withdrawal — matches admin.php details)
   const [instantDepIdentifier, setInstantDepIdentifier] = useState('');
-  const [instantDepAmount, setInstantDepAmount] = useState('2500');
+  const [instantDepAmount, setInstantDepAmount] = useState('1000');
   const [instantDepMethod, setInstantDepMethod] = useState('إيداع فوري من الإدارة');
   const [instantDepNote, setInstantDepNote] = useState('');
   const [sendingDep, setSendingDep] = useState(false);
+  const [instantDepFeedback, setInstantDepFeedback] = useState<{
+    type: 'success' | 'error';
+    text: string;
+  } | null>(null);
 
-  // Custom message / deposit form
+  // Custom message / deposit form (Tab 3: orders)
   const [msgUserId, setMsgUserId] = useState(users[0]?.id ?? '');
   const [msgSender, setMsgSender] = useState('إدارة المنصة');
   const [msgBody, setMsgBody] = useState('');
-  const [depUserId, setDepUserId] = useState(users[0]?.id ?? '');
-  const [depAmount, setDepAmount] = useState('2500');
+  const [sendingMsg, setSendingMsg] = useState(false);
+  const [msgFeedback, setMsgFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const [depIdentifier, setDepIdentifier] = useState('');
+  const [depAmount, setDepAmount] = useState('1000');
+  const [depMethod, setDepMethod] = useState('إيداع فوري من الإدارة');
+  const [depNote, setDepNote] = useState('');
+  const [sendingOrderDep, setSendingOrderDep] = useState(false);
+  const [orderDepFeedback, setOrderDepFeedback] = useState<{
+    type: 'success' | 'error';
+    text: string;
+  } | null>(null);
 
   // Config form
   const [platformNameInput, setPlatformNameInput] = useState(state.config.platformName);
   const [usdRateInput, setUsdRateInput] = useState(String(state.config.usdRate));
   const [newAdminPass, setNewAdminPass] = useState('');
   const [savingConfig, setSavingConfig] = useState(false);
+  const [configFeedback, setConfigFeedback] = useState<{
+    type: 'success' | 'error';
+    text: string;
+  } | null>(null);
 
   useEffect(() => {
     setPlatformNameInput(state.config.platformName);
@@ -215,10 +226,7 @@ export function AdminDashboardPage({
     if ((!msgUserId || !users.some((u) => u.id === msgUserId)) && users[0]?.id) {
       setMsgUserId(users[0].id);
     }
-    if ((!depUserId || !users.some((u) => u.id === depUserId)) && users[0]?.id) {
-      setDepUserId(users[0].id);
-    }
-  }, [users, wdUserId, msgUserId, depUserId]);
+  }, [users, wdUserId, msgUserId]);
 
   // Periodic background sync as fallback alongside Firestore real-time listeners
   useEffect(() => {
@@ -242,6 +250,28 @@ export function AdminDashboardPage({
       ) ?? null
     );
   }, [users, instantDepIdentifier]);
+
+  const matchedOrderDepUser = useMemo(() => {
+    const qRaw = depIdentifier.trim().toLowerCase();
+    if (!qRaw) return null;
+    const qNoAt = qRaw.replace(/^@/, '');
+    return (
+      users.find(
+        (u) =>
+          u.email.trim().toLowerCase() === qRaw ||
+          u.username.trim().toLowerCase().replace(/^@/, '') === qNoAt ||
+          (u.playerId || '').trim().toLowerCase() === qRaw
+      ) ?? null
+    );
+  }, [users, depIdentifier]);
+
+  const jumpToCreatePlayer = () => {
+    setTab('users');
+    setTimeout(() => {
+      emailInputRef.current?.focus();
+      emailInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 60);
+  };
 
   const filteredUsers = useMemo(() => {
     const q = userSearch.trim().toLowerCase();
@@ -405,9 +435,9 @@ export function AdminDashboardPage({
   ];
 
   return (
-    <div dir="rtl" className="min-h-dvh bg-[#0e0e10] text-white flex flex-col">
+    <div dir="rtl" className="h-dvh overflow-y-auto scrollbar-dark bg-[#0e0e10] text-white flex flex-col">
       {/* Executive Sticky Top Command Bar */}
-      <header className="sticky top-0 z-30 border-b border-[#222226] bg-[#141416]/95 backdrop-blur-md px-4 lg:px-6 h-16 flex items-center justify-between gap-3">
+      <header className="sticky top-0 z-30 border-b border-[#222226] bg-[#141416]/95 backdrop-blur-md px-4 lg:px-6 h-16 shrink-0 flex items-center justify-between gap-3">
         <div className="flex items-center gap-3 min-w-0">
           <HostapayLogo
             platformName={state.config.platformName}
@@ -417,26 +447,23 @@ export function AdminDashboardPage({
             admin.php
           </span>
 
-          {/* Firebase Connection Pill */}
-          {firebaseStatus === 'connected' ? (
-            <span className="hidden md:inline-flex items-center gap-1.5 rounded-lg border border-[#00e344]/30 bg-[#00e344]/10 px-2.5 py-1 text-[11px] font-semibold text-[#00e344]">
-              <Database className="h-3 w-3" />
-              <span>Firebase لايف: moorrcv</span>
-            </span>
-          ) : firebaseStatus === 'permission-error' ? (
-            <span className="hidden md:inline-flex items-center gap-1.5 rounded-lg border border-[#db9d37]/40 bg-[#db9d37]/15 px-2.5 py-1 text-[11px] font-semibold text-[#db9d37]">
-              <AlertTriangle className="h-3 w-3" />
-              <span>Firebase يحتاج تفعيل Rules</span>
-            </span>
-          ) : (
-            <span className="hidden md:inline-flex items-center gap-1.5 rounded-lg border border-[#323236] bg-[#1b1b1e] px-2.5 py-1 text-[11px] text-[#9b9ba2]">
-              <Database className="h-3 w-3" />
-              <span>مزامنة Firebase...</span>
-            </span>
-          )}
+          {/* Connection Status Pill */}
+          <span className="hidden md:inline-flex items-center gap-1.5 rounded-lg border border-[#00e344]/30 bg-[#00e344]/10 px-2.5 py-1 text-[11px] font-semibold text-[#00e344]">
+            <Database className="h-3 w-3" />
+            <span>{firebaseStatus === 'connected' ? 'Firebase لايف: moorrcv' : 'متصل وجاهز'}</span>
+          </span>
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={jumpToCreatePlayer}
+            className="flex h-9 items-center gap-1.5 rounded-[10px] bg-[#e25d0a] px-3 text-[12.5px] font-bold text-white hover:bg-[#e25d0a]/85 transition-colors cursor-pointer"
+          >
+            <UserPlus className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">إنشاء حساب لاعب</span>
+          </button>
+
           {/* Live Online Users Pill */}
           <div className="flex items-center gap-2 rounded-[10px] border border-[#00e344]/30 bg-[#00e344]/10 px-3 py-1.5 text-[12.5px] font-semibold text-[#00e344]">
             <span className="relative flex h-2.5 w-2.5">
@@ -552,75 +579,6 @@ export function AdminDashboardPage({
 
         {/* Workspace Column */}
         <div className="flex-1 min-w-0 space-y-5">
-          {/* Firestore Rules Warning Banner (only shown if permission-denied/disabled on moorrcv) */}
-          {firebaseStatus === 'permission-error' && (
-            <div className="rounded-[14px] border border-[#db9d37]/40 bg-[#db9d37]/10 p-4 flex flex-col gap-3">
-              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2 text-[13.5px] font-bold text-[#db9d37]">
-                    <AlertTriangle className="h-4 w-4 shrink-0" />
-                    <span>
-                      ملاحظة Firestore (moorrcv): الحسابات والدخول شغالين الآن عبر السيرفر والمتصفح مباشرة
-                    </span>
-                  </div>
-                  <p className="text-[12px] text-[#d4c39a] leading-relaxed">
-                    لمزامنة الحسابات سحابيًا بين <span className="font-mono-num">admin.php</span> والموقع عبر جميع الأجهزة، فعّل Cloud Firestore في مشروع{' '}
-                    <span className="font-mono-num font-bold text-white">moorrcv</span> واضبط Rules ثم اضغط{' '}
-                    <strong className="text-white">فحص الاتصال ومزامنة الحسابات</strong>.
-                    {firebaseError ? ` (${firebaseError})` : ''}
-                  </p>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2 shrink-0">
-                  <a
-                    href="https://console.developers.google.com/apis/api/firestore.googleapis.com/overview?project=moorrcv"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1.5 rounded-[10px] border border-[#e25d0a]/50 bg-[#e25d0a]/15 px-3 py-2 text-[12px] font-semibold text-[#ff9352] hover:bg-[#e25d0a]/25"
-                  >
-                    <ExternalLink className="h-3.5 w-3.5" />
-                    <span>تفعيل Firestore في moorrcv</span>
-                  </a>
-                  <a
-                    href="https://console.firebase.google.com/project/moorrcv/firestore/rules"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1.5 rounded-[10px] border border-[#db9d37]/50 bg-[#1a1610] px-3 py-2 text-[12px] font-semibold text-[#db9d37] hover:bg-[#272115]"
-                  >
-                    <ExternalLink className="h-3.5 w-3.5" />
-                    <span>فتح Rules</span>
-                  </a>
-                  <button
-                    type="button"
-                    onClick={() => copyText('rules', FIRESTORE_OPEN_RULES, 'قواعد Firestore')}
-                    className="inline-flex items-center gap-1.5 rounded-[10px] border border-[#db9d37]/50 bg-[#1a1610] px-3 py-2 text-[12px] font-semibold text-[#db9d37] hover:bg-[#272115] cursor-pointer"
-                  >
-                    <Copy className="h-3.5 w-3.5" />
-                    <span>نسخ قواعد Firestore</span>
-                  </button>
-                  {onRetryFirebase && (
-                    <button
-                      type="button"
-                      disabled={retryingFirebase}
-                      onClick={async () => {
-                        setRetryingFirebase(true);
-                        try {
-                          await onRetryFirebase();
-                        } finally {
-                          setRetryingFirebase(false);
-                        }
-                      }}
-                      className="inline-flex items-center gap-1.5 rounded-[10px] bg-[#00e344] px-3.5 py-2 text-[12px] font-bold text-black hover:bg-[#00e344]/90 disabled:opacity-60 cursor-pointer"
-                    >
-                      <RefreshCw className={`h-3.5 w-3.5 ${retryingFirebase ? 'animate-spin' : ''}`} />
-                      <span>{retryingFirebase ? 'جاري الفحص...' : 'فحص الاتصال ومزامنة الحسابات'}</span>
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-
           {/* KPI Grid */}
           <div className="grid grid-cols-2 xl:grid-cols-4 gap-3.5">
             <div className="rounded-[15px] border border-[#242429] bg-gradient-to-b from-[#1a1a1e] to-[#141417] p-4 flex items-center justify-between">
@@ -731,30 +689,40 @@ export function AdminDashboardPage({
                 <form
                   onSubmit={async (e) => {
                     e.preventDefault();
+                    setCreateUserFeedback(null);
                     setCreatingUser(true);
                     try {
                       const prefix =
                         newEmail.trim().split('@')[0].replace(/[^a-zA-Z0-9_]/g, '') || 'agent';
+                      const cleanMail = newEmail.trim();
+                      const cleanPass = newPassword.trim();
                       const res = await onCreateUser({
-                        email: newEmail.trim(),
-                        password: newPassword.trim(),
+                        email: cleanMail,
+                        password: cleanPass,
                         displayName: newDisplayName.trim() || prefix,
                         username: newUsername.trim() || `${prefix}_egp`,
                         balanceEgp: 0,
                       });
                       if (res.ok) {
+                        const pidText = res.user?.playerId ? ` · ${res.user.playerId}` : '';
+                        setCreateUserFeedback({
+                          type: 'success',
+                          text: `تم إنشاء الحساب وتفعيله للدخول فورًا (${cleanMail}${pidText})`,
+                        });
                         onNotify(
                           'success',
                           'تم إنشاء الحساب وتفعيله (رصيد 0 ج.م)',
-                          res.user?.playerId
-                            ? `${newEmail.trim()} · ${res.user.playerId}`
-                            : newEmail.trim()
+                          `${cleanMail}${pidText}`
                         );
                         setNewEmail('');
                         setNewPassword('');
                         setNewDisplayName('');
                         setNewUsername('');
                       } else {
+                        setCreateUserFeedback({
+                          type: 'error',
+                          text: res.error || 'تعذر إنشاء الحساب',
+                        });
                         onNotify('error', res.error || 'تعذر إنشاء الحساب');
                       }
                     } finally {
@@ -763,9 +731,21 @@ export function AdminDashboardPage({
                   }}
                   className="space-y-3"
                 >
+                  {createUserFeedback && (
+                    <div
+                      className={`rounded-[10px] border px-3 py-2 text-[12px] font-medium ${
+                        createUserFeedback.type === 'success'
+                          ? 'border-[#00e344]/40 bg-[#00e344]/10 text-[#00e344]'
+                          : 'border-[#e32200]/40 bg-[#e32200]/10 text-[#ff6b57]'
+                      }`}
+                    >
+                      {createUserFeedback.text}
+                    </div>
+                  )}
                   <div className="space-y-1">
                     <label className="text-[12px] text-[#b4b4bc]">البريد الإلكتروني *</label>
                     <input
+                      ref={emailInputRef}
                       type="email"
                       required
                       placeholder="player@domain.com"
@@ -1151,6 +1131,22 @@ export function AdminDashboardPage({
           {/* TAB 2: SIDE-BY-SIDE WITHDRAWAL REQUEST & INSTANT DEPOSIT REQUEST */}
           {tab === 'withdrawals' && (
             <div className="space-y-5">
+              {users.length === 0 && (
+                <div className="rounded-[14px] border border-[#db9d37]/35 bg-[#db9d37]/10 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+                  <div className="text-[13px] text-[#f5d590]">
+                    مفيش حسابات لاعبين متسجلة لسه عشان تعمل لها سحب أو إيداع.
+                  </div>
+                  <button
+                    type="button"
+                    onClick={jumpToCreatePlayer}
+                    className="inline-flex items-center gap-1.5 rounded-[9px] bg-[#e25d0a] px-3.5 py-1.5 text-[12px] font-bold text-white hover:bg-[#e25d0a]/85 cursor-pointer"
+                  >
+                    <UserPlus className="h-3.5 w-3.5" />
+                    <span>إنشاء حساب لاعب الآن</span>
+                  </button>
+                </div>
+              )}
+
               {/* Side-by-side Action Forms */}
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
                 {/* CARD 1: WITHDRAWAL REQUEST */}
@@ -1173,21 +1169,38 @@ export function AdminDashboardPage({
                   <form
                     onSubmit={async (e) => {
                       e.preventDefault();
+                      setWdFeedback(null);
+                      const amt = Number(wdAmount) || 0;
+                      if (!wdUserId) {
+                        setWdFeedback({ type: 'error', text: 'اختر اللاعب أولاً' });
+                        return;
+                      }
+                      if (amt <= 0) {
+                        setWdFeedback({ type: 'error', text: 'اكتب مبلغ سحب صحيح' });
+                        return;
+                      }
                       setSendingWd(true);
                       try {
                         const res = await onSendWithdrawalToUser({
                           userId: wdUserId,
-                          amountEgp: Number(wdAmount) || 0,
-                          destinationMethod: wdMethod,
-                          requisiteNumber: wdNumber,
-                          recipientName: wdRecipient || 'تحويل سحب',
+                          amountEgp: amt,
+                          destinationMethod: wdMethod.trim() || 'فودافون كاش',
+                          requisiteNumber: wdNumber.trim() || '01000000000',
+                          recipientName: wdRecipient.trim() || 'تحويل سحب',
                           note: wdNote,
                         });
                         if (res.ok) {
+                          const targetU = users.find((u) => u.id === wdUserId);
+                          setWdFeedback({
+                            type: 'success',
+                            text: `تم إرسال طلب السحب (${formatMoney(amt)} ج.م) إلى رسائل ${targetU?.email || 'اللاعب'}`,
+                          });
                           onNotify('success', 'تم إرسال طلب السحب لرسايل اللاعب');
                           setWdNote('');
                         } else {
-                          onNotify('error', res.error || 'حصل خطأ في إرسال الطلب');
+                          const msg = res.error || 'حصل خطأ في إرسال الطلب';
+                          setWdFeedback({ type: 'error', text: msg });
+                          onNotify('error', msg);
                         }
                       } finally {
                         setSendingWd(false);
@@ -1195,16 +1208,29 @@ export function AdminDashboardPage({
                     }}
                     className="space-y-3.5"
                   >
+                    {wdFeedback && (
+                      <div
+                        className={`rounded-[10px] border px-3 py-2 text-[12px] font-medium ${
+                          wdFeedback.type === 'success'
+                            ? 'border-[#00e344]/40 bg-[#00e344]/10 text-[#00e344]'
+                            : 'border-[#e32200]/40 bg-[#e32200]/10 text-[#ff6b57]'
+                        }`}
+                      >
+                        {wdFeedback.text}
+                      </div>
+                    )}
+
                     <div className="space-y-1">
-                      <label className="text-[12px] text-[#b4b4bc]">اختر اللاعب</label>
+                      <label className="text-[12px] text-[#b4b4bc]">اختر المستخدم بالجيميل *</label>
                       <select
                         value={wdUserId}
                         onChange={(e) => setWdUserId(e.target.value)}
                         className="w-full rounded-[10px] border border-[#2e2e34] bg-[#101012] px-3 py-2.5 text-[13px] text-white outline-none focus:border-[#e25d0a]"
                       >
+                        {users.length === 0 && <option value="">لا يوجد لاعبين بعد</option>}
                         {users.map((u) => (
                           <option key={u.id} value={u.id}>
-                            {u.displayName} (@{u.username}) · {formatMoney(u.balanceEgp)} ج.م
+                            {u.email} ({u.displayName}) · {formatMoney(u.balanceEgp)} ج.م
                           </option>
                         ))}
                       </select>
@@ -1239,7 +1265,15 @@ export function AdminDashboardPage({
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-[12px] text-[#b4b4bc]">وسيلة السحب</label>
+                      <label className="text-[12px] text-[#b4b4bc]">طريقة التحويل / وسيلة السحب</label>
+                      <input
+                        type="text"
+                        required
+                        value={wdMethod}
+                        onChange={(e) => setWdMethod(e.target.value)}
+                        placeholder="فودافون كاش / إنستا باي"
+                        className="w-full rounded-[10px] border border-[#2e2e34] bg-[#101012] px-3 py-2 text-[13px] text-white outline-none focus:border-[#e25d0a]"
+                      />
                       <div className="flex flex-wrap gap-1.5">
                         {PAYMENT_METHOD_CHIPS.map((m) => (
                           <button
@@ -1303,32 +1337,38 @@ export function AdminDashboardPage({
                   </form>
                 </div>
 
-                {/* CARD 2: INSTANT DEPOSIT REQUEST (AUTO-CREDIT BY EMAIL OR USERNAME) */}
+                {/* CARD 2: INSTANT DEPOSIT REQUEST (EXACT admin.php DETAILS — BY GMAIL / USERNAME) */}
                 <div className="rounded-[16px] border border-[#00e344]/25 bg-[#151518] p-5 space-y-4 h-fit">
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2 text-[15.5px] font-bold text-white">
                       <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#00e344]/15 text-[#00e344]">
                         <ArrowDownLeft className="h-4 w-4" />
                       </span>
-                      <span>طلب إيداع (إضافة رصيد تلقائي)</span>
+                      <span>عمل إيداع لمستخدم (بالجيميل أو اليوزر)</span>
                     </div>
                     <span className="rounded-md bg-[#00e344]/10 border border-[#00e344]/30 px-2 py-0.5 text-[11px] font-semibold text-[#00e344]">
-                      ينزل في الحساب فورًا
+                      ينزل فورًا في الحساب
                     </span>
                   </div>
                   <p className="text-[12px] text-[#8d8d95]">
-                    اختار العميل أو اكتب <strong className="text-white">البريد الإلكتروني</strong> أو <strong className="text-white">اليوزر نيم</strong> وحدد المبلغ — أول ما تضيفه بينزل في رصيد حسابه تلقائيًا.
+                    نفس تفاصيل <span className="font-mono-num text-[#db9d37]">admin.php</span> بالظبط: اختر الجيميل أو اكتبه، حدد المبلغ وطريقة الإيداع والملاحظة — ينزل الرصيد فورًا للاعب.
                   </p>
 
                   <form
                     onSubmit={async (e) => {
                       e.preventDefault();
+                      setInstantDepFeedback(null);
                       const amt = Number(instantDepAmount) || 0;
                       if (amt <= 0) {
+                        setInstantDepFeedback({ type: 'error', text: 'اكتب مبلغ إيداع صحيح' });
                         onNotify('error', 'اكتب مبلغ إيداع صحيح');
                         return;
                       }
                       if (!matchedDepUser && !instantDepIdentifier.trim()) {
+                        setInstantDepFeedback({
+                          type: 'error',
+                          text: 'اختر الجيميل من القائمة أو اكتبه في الخانة',
+                        });
                         onNotify('error', 'اكتب البريد الإلكتروني أو اليوزر نيم للعميل');
                         return;
                       }
@@ -1338,13 +1378,22 @@ export function AdminDashboardPage({
                           userId: matchedDepUser?.id,
                           identifier: instantDepIdentifier.trim(),
                           amountEgp: amt,
-                          bankName: instantDepMethod,
+                          bankName: instantDepMethod.trim() || 'إيداع فوري من الإدارة',
                           note: instantDepNote.trim() || undefined,
                           autoCredit: true,
                         });
                         if (res.ok) {
                           const targetName =
                             res.user?.displayName || matchedDepUser?.displayName || instantDepIdentifier;
+                          const targetEmail = res.user?.email || matchedDepUser?.email || '';
+                          const newBalText =
+                            res.user?.balanceEgp !== undefined
+                              ? ` · الرصيد الآن: ${formatMoney(res.user.balanceEgp)} ج.م`
+                              : '';
+                          setInstantDepFeedback({
+                            type: 'success',
+                            text: `تم إيداع +${formatMoney(amt)} ج.م لحساب ${targetName} (${targetEmail})${newBalText}`,
+                          });
                           onNotify(
                             'success',
                             `تم إيداع ${formatMoney(amt)} ج.م تلقائيًا`,
@@ -1352,7 +1401,9 @@ export function AdminDashboardPage({
                           );
                           setInstantDepNote('');
                         } else {
-                          onNotify('error', res.error || 'تعذر تنفيذ طلب الإيداع');
+                          const msg = res.error || 'تعذر تنفيذ طلب الإيداع';
+                          setInstantDepFeedback({ type: 'error', text: msg });
+                          onNotify('error', msg);
                         }
                       } finally {
                         setSendingDep(false);
@@ -1360,10 +1411,22 @@ export function AdminDashboardPage({
                     }}
                     className="space-y-3.5"
                   >
-                    {/* Quick pick dropdown by Gmail / Username (mirrors Withdrawal selector) */}
+                    {instantDepFeedback && (
+                      <div
+                        className={`rounded-[10px] border px-3 py-2 text-[12px] font-medium ${
+                          instantDepFeedback.type === 'success'
+                            ? 'border-[#00e344]/40 bg-[#00e344]/10 text-[#00e344]'
+                            : 'border-[#e32200]/40 bg-[#e32200]/10 text-[#ff6b57]'
+                        }`}
+                      >
+                        {instantDepFeedback.text}
+                      </div>
+                    )}
+
+                    {/* Quick pick dropdown by Gmail / Username */}
                     <div className="space-y-1">
                       <label className="text-[12px] text-[#b4b4bc]">
-                        اختر الجيميل / العميل *
+                        اختر الجيميل بتاع العميل
                       </label>
                       <select
                         value={matchedDepUser?.id ?? ''}
@@ -1371,14 +1434,16 @@ export function AdminDashboardPage({
                           const found = users.find((u) => u.id === e.target.value);
                           if (found) {
                             setInstantDepIdentifier(found.email);
+                          } else {
+                            setInstantDepIdentifier('');
                           }
                         }}
                         className="w-full rounded-[10px] border border-[#2e2e34] bg-[#101012] px-3 py-2.5 text-[13px] text-white outline-none focus:border-[#00e344]"
                       >
-                        <option value="">— اختر جيميل العميل أو اكتبه تحت —</option>
+                        <option value="">— اختر من القائمة أو اكتب تحت —</option>
                         {users.map((u) => (
                           <option key={u.id} value={u.id}>
-                            {u.email} · @{u.username} ({u.displayName}) — {formatMoney(u.balanceEgp)} ج.م
+                            {u.email} (@{u.username}) — {formatMoney(u.balanceEgp)} ج.م
                           </option>
                         ))}
                       </select>
@@ -1387,13 +1452,13 @@ export function AdminDashboardPage({
                     {/* Email or Username input */}
                     <div className="space-y-1.5">
                       <label className="text-[12px] text-[#b4b4bc]">
-                        أو اكتب الجيميل / اليوزر نيم مباشرة
+                        أو اكتب الجيميل / اليوزرنيم
                       </label>
                       <input
                         type="text"
                         value={instantDepIdentifier}
                         onChange={(e) => setInstantDepIdentifier(e.target.value)}
-                        placeholder="مثال: ahmed_egp أو player@domain.com"
+                        placeholder="user@gmail.com أو ahmed_egp"
                         className="w-full rounded-[10px] border border-[#2e2e34] bg-[#101012] px-3 py-2.5 text-[13.5px] font-mono-num text-white outline-none focus:border-[#00e344]"
                       />
                       {matchedDepUser ? (
@@ -1427,6 +1492,7 @@ export function AdminDashboardPage({
                       <label className="text-[12px] text-[#b4b4bc]">مبلغ الإيداع (جنيه مصري)</label>
                       <input
                         type="number"
+                        step="0.01"
                         min={1}
                         required
                         value={instantDepAmount}
@@ -1451,11 +1517,18 @@ export function AdminDashboardPage({
                       </div>
                     </div>
 
-                    {/* Deposit Channel */}
+                    {/* Editable Deposit Method + Chips (mirrors admin.php bankName input) */}
                     <div className="space-y-1.5">
-                      <label className="text-[12px] text-[#b4b4bc]">نوع الإيداع</label>
+                      <label className="text-[12px] text-[#b4b4bc]">طريقة الإيداع</label>
+                      <input
+                        type="text"
+                        value={instantDepMethod}
+                        onChange={(e) => setInstantDepMethod(e.target.value)}
+                        placeholder="إيداع فوري من الإدارة"
+                        className="w-full rounded-[10px] border border-[#2e2e34] bg-[#101012] px-3 py-2 text-[13px] text-white outline-none focus:border-[#00e344]"
+                      />
                       <div className="flex flex-wrap gap-1.5">
-                        {['إيداع فوري من الإدارة', 'فودافون كاش', 'إنستا باي', 'مكافأة رصيد'].map((ch) => (
+                        {['إيداع فوري من الإدارة', 'فودافون كاش', 'إنستا باي', 'فوري', 'مكافأة رصيد'].map((ch) => (
                           <button
                             key={ch}
                             type="button"
@@ -1474,12 +1547,12 @@ export function AdminDashboardPage({
 
                     {/* Optional Note */}
                     <div className="space-y-1">
-                      <label className="text-[12px] text-[#b4b4bc]">ملاحظة للإشعار (اختياري)</label>
+                      <label className="text-[12px] text-[#b4b4bc]">ملاحظة (اختياري)</label>
                       <input
                         type="text"
                         value={instantDepNote}
                         onChange={(e) => setInstantDepNote(e.target.value)}
-                        placeholder="تم شحن حسابك وإضافة الرصيد تلقائيًا"
+                        placeholder="تم إضافة الرصيد تلقائيًا"
                         className="w-full rounded-[10px] border border-[#2e2e34] bg-[#101012] px-3 py-2 text-[12.5px] text-white outline-none focus:border-[#00e344]"
                       />
                     </div>
@@ -1491,7 +1564,7 @@ export function AdminDashboardPage({
                     >
                       <Plus className="h-4 w-4" />
                       <span>
-                        {sendingDep ? 'جاري إضافة الإيداع...' : 'إضافة الإيداع ونزوله في الحساب تلقائيًا'}
+                        {sendingDep ? 'جاري إضافة الإيداع...' : 'إضافة الإيداع ونزوله فورًا'}
                       </span>
                     </button>
                   </form>
@@ -1518,6 +1591,13 @@ export function AdminDashboardPage({
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-[#222227]">
+                        {adminWithdrawals.length === 0 && (
+                          <tr>
+                            <td colSpan={5} className="py-6 text-center text-[12px] text-[#787882]">
+                              لا توجد طلبات سحب مسجلة حتى الآن
+                            </td>
+                          </tr>
+                        )}
                         {adminWithdrawals.map((w) => {
                           const u = users.find((usr) => usr.id === w.userId);
                           return (
@@ -1572,12 +1652,20 @@ export function AdminDashboardPage({
                         <tr>
                           <th className="py-2.5 px-3.5 text-start">رقم العملية</th>
                           <th className="py-2.5 px-3.5 text-start">العميل</th>
+                          <th className="py-2.5 px-3.5 text-start">الطريقة</th>
                           <th className="py-2.5 px-3.5 text-start">المبلغ</th>
                           <th className="py-2.5 px-3.5 text-start">الحالة</th>
                           <th className="py-2.5 px-3.5 text-start">التاريخ</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-[#222227]">
+                        {state.deposits.length === 0 && (
+                          <tr>
+                            <td colSpan={6} className="py-6 text-center text-[12px] text-[#787882]">
+                              لا توجد عمليات إيداع منفذة حتى الآن
+                            </td>
+                          </tr>
+                        )}
                         {state.deposits.map((d) => {
                           const u = users.find((usr) => usr.id === d.userId);
                           return (
@@ -1586,8 +1674,11 @@ export function AdminDashboardPage({
                               <td className="py-2.5 px-3.5 text-[#d4d4dc]">
                                 <div>{u ? u.displayName : d.ownerName}</div>
                                 <div className="text-[10.5px] font-mono-num text-[#787882]">
-                                  {u ? `@${u.username}` : d.requisiteNumber}
+                                  {u ? u.email : d.requisiteNumber}
                                 </div>
+                              </td>
+                              <td className="py-2.5 px-3.5 text-[11.5px] text-[#b4b4bc]">
+                                {d.bankName || 'إيداع فوري'}
                               </td>
                               <td className="py-2.5 px-3.5 font-mono-num font-bold text-[#00e344] whitespace-nowrap">
                                 +{formatMoney(d.amountLocal)} ج.م
@@ -1611,139 +1702,339 @@ export function AdminDashboardPage({
 
           {/* TAB 3: ORDERS & MESSAGES CONTROL */}
           {tab === 'orders' && (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-              <div className="rounded-[16px] border border-[#26262b] bg-[#151518] p-5 space-y-4">
-                <div className="text-[15.5px] font-bold text-white">إرسال رسالة لبروفايل لاعب</div>
-                <form
-                  onSubmit={async (e) => {
-                    e.preventDefault();
-                    await onSendMessageToUser({
-                      userId: msgUserId,
-                      sender: msgSender,
-                      body: msgBody,
-                    });
-                    setMsgBody('');
-                    onNotify('success', 'تم إرسال الرسالة للاعب');
-                  }}
-                  className="space-y-3"
-                >
-                  <select
-                    value={msgUserId}
-                    onChange={(e) => setMsgUserId(e.target.value)}
-                    className="w-full rounded-[10px] border border-[#2e2e34] bg-[#101012] px-3 py-2.5 text-[13px] text-white outline-none"
-                  >
-                    {users.map((u) => (
-                      <option key={u.id} value={u.id}>
-                        {u.displayName} [{u.playerId}] ({u.email})
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    type="text"
-                    value={msgSender}
-                    onChange={(e) => setMsgSender(e.target.value)}
-                    placeholder="المرسل (مثال: إدارة المنصة)"
-                    className="w-full rounded-[10px] border border-[#2e2e34] bg-[#101012] px-3 py-2 text-[13px] text-white outline-none"
-                  />
-                  <textarea
-                    rows={3}
-                    required
-                    value={msgBody}
-                    onChange={(e) => setMsgBody(e.target.value)}
-                    placeholder="اكتب نص الرسالة..."
-                    className="w-full rounded-[10px] border border-[#2e2e34] bg-[#101012] px-3 py-2 text-[13px] text-white outline-none"
-                  />
+            <div className="space-y-5">
+              {users.length === 0 && (
+                <div className="rounded-[14px] border border-[#db9d37]/35 bg-[#db9d37]/10 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+                  <div className="text-[13px] text-[#f5d590]">
+                    أنشئ حساب لاعب واحد على الأقل لتتمكن من إرسال الرسائل المباشرة والإيداعات.
+                  </div>
                   <button
-                    type="submit"
-                    disabled={users.length === 0}
-                    className="rounded-[10px] bg-[#1b5ae2] px-4 py-2.5 text-[13px] font-semibold text-white hover:bg-[#1b5ae2]/85 disabled:opacity-50 cursor-pointer"
+                    type="button"
+                    onClick={jumpToCreatePlayer}
+                    className="inline-flex items-center gap-1.5 rounded-[9px] bg-[#e25d0a] px-3.5 py-1.5 text-[12px] font-bold text-white hover:bg-[#e25d0a]/85 cursor-pointer"
                   >
-                    إرسال الرسالة الآن
+                    <UserPlus className="h-3.5 w-3.5" />
+                    <span>إنشاء حساب لاعب الآن</span>
                   </button>
-                </form>
-              </div>
+                </div>
+              )}
 
-              <div className="rounded-[16px] border border-[#26262b] bg-[#151518] p-5 space-y-4">
-                <div className="text-[15.5px] font-bold text-white">إيداع فوري لحساب لاعب</div>
-                <form
-                  onSubmit={async (e) => {
-                    e.preventDefault();
-                    const res = await onCreateDepositForUser({
-                      userId: depUserId,
-                      amountEgp: Number(depAmount) || 1000,
-                      autoCredit: true,
-                    });
-                    if (res.ok) {
-                      onNotify('success', 'تم إضافة الإيداع ونزوله تلقائيًا');
-                    } else {
-                      onNotify('error', res.error || 'تعذر تنفيذ الإيداع');
-                    }
-                  }}
-                  className="space-y-3"
-                >
-                  <select
-                    value={depUserId}
-                    onChange={(e) => setDepUserId(e.target.value)}
-                    className="w-full rounded-[10px] border border-[#2e2e34] bg-[#101012] px-3 py-2.5 text-[13px] text-white outline-none"
-                  >
-                    {users.map((u) => (
-                      <option key={u.id} value={u.id}>
-                        {u.displayName} [{u.playerId}] ({u.email})
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    type="number"
-                    required
-                    value={depAmount}
-                    onChange={(e) => setDepAmount(e.target.value)}
-                    placeholder="المبلغ بالجنيه المصري"
-                    className="w-full rounded-[10px] border border-[#2e2e34] bg-[#101012] px-3 py-2 text-[13.5px] font-mono-num text-white outline-none"
-                  />
-                  <button
-                    type="submit"
-                    disabled={users.length === 0}
-                    className="rounded-[10px] bg-[#e25d0a] px-4 py-2.5 text-[13px] font-semibold text-white hover:bg-[#e25d0a]/85 disabled:opacity-50 cursor-pointer"
-                  >
-                    إرسال طلب الإيداع
-                  </button>
-                </form>
-
-                <div className="pt-3 border-t border-[#232328] space-y-2 max-h-60 overflow-y-auto scrollbar-dark">
-                  {state.deposits.slice(0, 10).map((d) => (
-                    <div
-                      key={d.id}
-                      className="flex items-center justify-between rounded-lg border border-[#24242a] bg-[#101012] px-3 py-2 text-[12px]"
-                    >
-                      <div>
-                        <span className="font-mono-num font-bold text-white">{d.orderId}</span>
-                        <span className="mx-2 text-[#db9d37] font-mono-num">
-                          {formatMoney(d.amountLocal)} ج.م
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <StatusBadge status={d.status} lang="ar" />
-                        {d.status === 'pending' && (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => onDepositAction(d.id, 'confirm')}
-                              className="rounded bg-[#00e344] px-2 py-0.5 text-[11px] font-bold text-black cursor-pointer"
-                            >
-                              تأكيد
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => onDepositAction(d.id, 'cancel')}
-                              className="rounded bg-[#e32200]/20 px-2 py-0.5 text-[11px] text-[#ff6b57] cursor-pointer"
-                            >
-                              إلغاء
-                            </button>
-                          </>
-                        )}
-                      </div>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                {/* Direct Message Card */}
+                <div className="rounded-[16px] border border-[#26262b] bg-[#151518] p-5 space-y-4 h-fit">
+                  <div className="flex items-center justify-between">
+                    <div className="text-[15.5px] font-bold text-white flex items-center gap-2">
+                      <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#1b5ae2]/20 text-[#60a5fa]">
+                        <MailPlus className="h-4 w-4" />
+                      </span>
+                      <span>إرسال رسالة لبروفايل لاعب</span>
                     </div>
-                  ))}
+                  </div>
+                  <form
+                    onSubmit={async (e) => {
+                      e.preventDefault();
+                      setMsgFeedback(null);
+                      if (!msgUserId) {
+                        setMsgFeedback({ type: 'error', text: 'اختر اللاعب أولاً' });
+                        return;
+                      }
+                      if (!msgBody.trim()) {
+                        setMsgFeedback({ type: 'error', text: 'اكتب نص الرسالة' });
+                        return;
+                      }
+                      setSendingMsg(true);
+                      try {
+                        await onSendMessageToUser({
+                          userId: msgUserId,
+                          sender: msgSender.trim() || 'إدارة المنصة',
+                          body: msgBody.trim(),
+                        });
+                        const targetU = users.find((u) => u.id === msgUserId);
+                        setMsgFeedback({
+                          type: 'success',
+                          text: `تم إرسال الرسالة إلى ${targetU?.email || 'اللاعب'} بنجاح`,
+                        });
+                        setMsgBody('');
+                        onNotify('success', 'تم إرسال الرسالة للاعب');
+                      } finally {
+                        setSendingMsg(false);
+                      }
+                    }}
+                    className="space-y-3"
+                  >
+                    {msgFeedback && (
+                      <div
+                        className={`rounded-[10px] border px-3 py-2 text-[12px] font-medium ${
+                          msgFeedback.type === 'success'
+                            ? 'border-[#00e344]/40 bg-[#00e344]/10 text-[#00e344]'
+                            : 'border-[#e32200]/40 bg-[#e32200]/10 text-[#ff6b57]'
+                        }`}
+                      >
+                        {msgFeedback.text}
+                      </div>
+                    )}
+
+                    <div className="space-y-1">
+                      <label className="text-[12px] text-[#b4b4bc]">اختر اللاعب</label>
+                      <select
+                        value={msgUserId}
+                        onChange={(e) => setMsgUserId(e.target.value)}
+                        className="w-full rounded-[10px] border border-[#2e2e34] bg-[#101012] px-3 py-2.5 text-[13px] text-white outline-none focus:border-[#1b5ae2]"
+                      >
+                        {users.length === 0 && <option value="">لا يوجد لاعبين بعد</option>}
+                        {users.map((u) => (
+                          <option key={u.id} value={u.id}>
+                            {u.displayName} [{u.playerId}] ({u.email})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[12px] text-[#b4b4bc]">اسم المرسل</label>
+                      <input
+                        type="text"
+                        value={msgSender}
+                        onChange={(e) => setMsgSender(e.target.value)}
+                        placeholder="المرسل (مثال: إدارة المنصة)"
+                        className="w-full rounded-[10px] border border-[#2e2e34] bg-[#101012] px-3 py-2 text-[13px] text-white outline-none focus:border-[#1b5ae2]"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[12px] text-[#b4b4bc]">نص الرسالة</label>
+                      <textarea
+                        rows={3}
+                        required
+                        value={msgBody}
+                        onChange={(e) => setMsgBody(e.target.value)}
+                        placeholder="اكتب نص الرسالة..."
+                        className="w-full rounded-[10px] border border-[#2e2e34] bg-[#101012] px-3 py-2 text-[13px] text-white outline-none focus:border-[#1b5ae2]"
+                      />
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={sendingMsg || users.length === 0}
+                      className="w-full flex items-center justify-center gap-2 rounded-[10px] bg-[#1b5ae2] px-4 py-2.5 text-[13px] font-semibold text-white hover:bg-[#1b5ae2]/85 disabled:opacity-50 cursor-pointer"
+                    >
+                      <Send className="h-4 w-4" />
+                      <span>{sendingMsg ? 'جاري الإرسال...' : 'إرسال الرسالة الآن'}</span>
+                    </button>
+                  </form>
+
+                  {/* Sent Messages Log */}
+                  <div className="pt-3 border-t border-[#232328] space-y-2 max-h-60 overflow-y-auto scrollbar-dark">
+                    <div className="text-[12px] font-semibold text-[#8d8d95]">
+                      آخر الرسائل المرسلة ({state.messages.length})
+                    </div>
+                    {state.messages.slice(0, 8).map((m) => {
+                      const targetU = users.find((u) => u.id === m.userId);
+                      return (
+                        <div
+                          key={m.id}
+                          className="rounded-lg border border-[#24242a] bg-[#101012] px-3 py-2 text-[12px] space-y-1"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-semibold text-[#60a5fa]">{m.sender}</span>
+                            <span className="text-[11px] font-mono-num text-[#787882]">
+                              {targetU ? targetU.email : 'لاعب'}
+                            </span>
+                          </div>
+                          <div className="text-[#d4d4dc] break-words">{m.body}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Instant Deposit Card (exact admin.php details) */}
+                <div className="rounded-[16px] border border-[#00e344]/25 bg-[#151518] p-5 space-y-4 h-fit">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-[15.5px] font-bold text-white flex items-center gap-2">
+                      <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#00e344]/15 text-[#00e344]">
+                        <ArrowDownLeft className="h-4 w-4" />
+                      </span>
+                      <span>إيداع فوري لحساب لاعب (بنفس تفاصيل admin.php)</span>
+                    </div>
+                  </div>
+                  <form
+                    onSubmit={async (e) => {
+                      e.preventDefault();
+                      setOrderDepFeedback(null);
+                      const amt = Number(depAmount) || 0;
+                      if (amt <= 0) {
+                        setOrderDepFeedback({ type: 'error', text: 'اكتب مبلغ إيداع صحيح' });
+                        return;
+                      }
+                      if (!matchedOrderDepUser && !depIdentifier.trim()) {
+                        setOrderDepFeedback({
+                          type: 'error',
+                          text: 'اختر الجيميل أو اكتبه في الخانة',
+                        });
+                        return;
+                      }
+                      setSendingOrderDep(true);
+                      try {
+                        const res = await onCreateDepositForUser({
+                          userId: matchedOrderDepUser?.id,
+                          identifier: depIdentifier.trim(),
+                          amountEgp: amt,
+                          bankName: depMethod.trim() || 'إيداع فوري من الإدارة',
+                          note: depNote.trim() || undefined,
+                          autoCredit: true,
+                        });
+                        if (res.ok) {
+                          const targetName =
+                            res.user?.displayName || matchedOrderDepUser?.displayName || depIdentifier;
+                          setOrderDepFeedback({
+                            type: 'success',
+                            text: `تم إيداع +${formatMoney(amt)} ج.م لحساب ${targetName} بنجاح`,
+                          });
+                          setDepNote('');
+                          onNotify('success', 'تم إضافة الإيداع ونزوله تلقائيًا', targetName);
+                        } else {
+                          const msg = res.error || 'تعذر تنفيذ الإيداع';
+                          setOrderDepFeedback({ type: 'error', text: msg });
+                          onNotify('error', msg);
+                        }
+                      } finally {
+                        setSendingOrderDep(false);
+                      }
+                    }}
+                    className="space-y-3"
+                  >
+                    {orderDepFeedback && (
+                      <div
+                        className={`rounded-[10px] border px-3 py-2 text-[12px] font-medium ${
+                          orderDepFeedback.type === 'success'
+                            ? 'border-[#00e344]/40 bg-[#00e344]/10 text-[#00e344]'
+                            : 'border-[#e32200]/40 bg-[#e32200]/10 text-[#ff6b57]'
+                        }`}
+                      >
+                        {orderDepFeedback.text}
+                      </div>
+                    )}
+
+                    <div className="space-y-1">
+                      <label className="text-[12px] text-[#b4b4bc]">اختر الجيميل بتاع العميل</label>
+                      <select
+                        value={matchedOrderDepUser?.id ?? ''}
+                        onChange={(e) => {
+                          const found = users.find((u) => u.id === e.target.value);
+                          setDepIdentifier(found ? found.email : '');
+                        }}
+                        className="w-full rounded-[10px] border border-[#2e2e34] bg-[#101012] px-3 py-2.5 text-[13px] text-white outline-none focus:border-[#00e344]"
+                      >
+                        <option value="">— اختر من القائمة أو اكتب تحت —</option>
+                        {users.map((u) => (
+                          <option key={u.id} value={u.id}>
+                            {u.email} (@{u.username}) — {formatMoney(u.balanceEgp)} ج.م
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[12px] text-[#b4b4bc]">أو اكتب الجيميل / اليوزرنيم</label>
+                      <input
+                        type="text"
+                        value={depIdentifier}
+                        onChange={(e) => setDepIdentifier(e.target.value)}
+                        placeholder="user@gmail.com أو ahmed_egp"
+                        className="w-full rounded-[10px] border border-[#2e2e34] bg-[#101012] px-3 py-2 text-[13px] font-mono-num text-white outline-none focus:border-[#00e344]"
+                      />
+                      {matchedOrderDepUser && (
+                        <div className="text-[11.5px] text-[#00e344] font-mono-num">
+                          ✓ {matchedOrderDepUser.displayName} ({formatMoney(matchedOrderDepUser.balanceEgp)} &rarr;{' '}
+                          {formatMoney((matchedOrderDepUser.balanceEgp || 0) + (Number(depAmount) || 0))} ج.م)
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[12px] text-[#b4b4bc]">مبلغ الإيداع (جنيه مصري)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min={1}
+                        required
+                        value={depAmount}
+                        onChange={(e) => setDepAmount(e.target.value)}
+                        placeholder="المبلغ بالجنيه المصري"
+                        className="w-full rounded-[10px] border border-[#2e2e34] bg-[#101012] px-3 py-2 text-[14px] font-bold font-mono-num text-[#00e344] outline-none focus:border-[#00e344]"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[12px] text-[#b4b4bc]">طريقة الإيداع</label>
+                      <input
+                        type="text"
+                        value={depMethod}
+                        onChange={(e) => setDepMethod(e.target.value)}
+                        placeholder="إيداع فوري من الإدارة"
+                        className="w-full rounded-[10px] border border-[#2e2e34] bg-[#101012] px-3 py-2 text-[13px] text-white outline-none focus:border-[#00e344]"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[12px] text-[#b4b4bc]">ملاحظة (اختياري)</label>
+                      <input
+                        type="text"
+                        value={depNote}
+                        onChange={(e) => setDepNote(e.target.value)}
+                        placeholder="تم إضافة الرصيد تلقائيًا"
+                        className="w-full rounded-[10px] border border-[#2e2e34] bg-[#101012] px-3 py-2 text-[12.5px] text-white outline-none focus:border-[#00e344]"
+                      />
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={sendingOrderDep || users.length === 0}
+                      className="w-full flex items-center justify-center gap-2 rounded-[10px] bg-[#00e344] px-4 py-2.5 text-[13px] font-bold text-black hover:opacity-90 disabled:opacity-50 cursor-pointer"
+                    >
+                      <Plus className="h-4 w-4" />
+                      <span>{sendingOrderDep ? 'جاري التنفيذ...' : 'إضافة الإيداع ونزوله فورًا'}</span>
+                    </button>
+                  </form>
+
+                  <div className="pt-3 border-t border-[#232328] space-y-2 max-h-60 overflow-y-auto scrollbar-dark">
+                    <div className="text-[12px] font-semibold text-[#8d8d95]">
+                      سجل الإيداعات ({state.deposits.length})
+                    </div>
+                    {state.deposits.slice(0, 12).map((d) => (
+                      <div
+                        key={d.id}
+                        className="flex items-center justify-between rounded-lg border border-[#24242a] bg-[#101012] px-3 py-2 text-[12px]"
+                      >
+                        <div>
+                          <span className="font-mono-num font-bold text-white">{d.orderId}</span>
+                          <span className="mx-2 text-[#00e344] font-mono-num">
+                            +{formatMoney(d.amountLocal)} ج.م
+                          </span>
+                          <span className="text-[#8d8d95] text-[11px]">{d.bankName}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <StatusBadge status={d.status} lang="ar" />
+                          {d.status === 'pending' && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => onDepositAction(d.id, 'confirm')}
+                                className="rounded bg-[#00e344] px-2 py-0.5 text-[11px] font-bold text-black cursor-pointer"
+                              >
+                                تأكيد
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => onDepositAction(d.id, 'cancel')}
+                                className="rounded bg-[#e32200]/20 px-2 py-0.5 text-[11px] text-[#ff6b57] cursor-pointer"
+                              >
+                                إلغاء
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
@@ -1763,7 +2054,42 @@ export function AdminDashboardPage({
                   اسم المنصة مثبّت نهائيًا على <strong className="text-white">Nexus Agency</strong> لا يتغير. يمكنك تعديل سعر صرف الدولار أو كلمة مرور الأدمن من هنا.
                 </p>
 
-                <div className="space-y-3">
+                <form
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    setConfigFeedback(null);
+                    setSavingConfig(true);
+                    try {
+                      const nextRate = Number(usdRateInput) || state.config.usdRate;
+                      await onUpdateConfig({
+                        platformName: 'Nexus Agency',
+                        usdRate: nextRate,
+                        ...(newAdminPass.trim() ? { adminPassword: newAdminPass.trim() } : {}),
+                      });
+                      setNewAdminPass('');
+                      setConfigFeedback({
+                        type: 'success',
+                        text: `تم حفظ الإعدادات بنجاح (سعر الصرف: 1 USD = ${nextRate} ج.م)`,
+                      });
+                      onNotify('success', 'تم حفظ الإعدادات', 'Nexus Agency');
+                    } finally {
+                      setSavingConfig(false);
+                    }
+                  }}
+                  className="space-y-3"
+                >
+                  {configFeedback && (
+                    <div
+                      className={`rounded-[10px] border px-3 py-2 text-[12px] font-medium ${
+                        configFeedback.type === 'success'
+                          ? 'border-[#00e344]/40 bg-[#00e344]/10 text-[#00e344]'
+                          : 'border-[#e32200]/40 bg-[#e32200]/10 text-[#ff6b57]'
+                      }`}
+                    >
+                      {configFeedback.text}
+                    </div>
+                  )}
+
                   <div className="space-y-1">
                     <div className="flex items-center justify-between">
                       <label className="text-[12px] text-[#b4b4bc]">
@@ -1789,6 +2115,7 @@ export function AdminDashboardPage({
                     <input
                       type="number"
                       step="0.01"
+                      required
                       value={usdRateInput}
                       onChange={(e) => setUsdRateInput(e.target.value)}
                       className="w-full rounded-[10px] border border-[#2e2e34] bg-[#101012] px-3 py-2.5 text-[14px] font-mono-num text-[#db9d37] outline-none focus:border-[#e25d0a]"
@@ -1807,27 +2134,13 @@ export function AdminDashboardPage({
                     />
                   </div>
                   <button
-                    type="button"
+                    type="submit"
                     disabled={savingConfig}
-                    onClick={async () => {
-                      setSavingConfig(true);
-                      try {
-                        await onUpdateConfig({
-                          platformName: 'Nexus Agency',
-                          usdRate: Number(usdRateInput) || state.config.usdRate,
-                          ...(newAdminPass.trim() ? { adminPassword: newAdminPass.trim() } : {}),
-                        });
-                        setNewAdminPass('');
-                        onNotify('success', 'تم حفظ الإعدادات', 'Nexus Agency');
-                      } finally {
-                        setSavingConfig(false);
-                      }
-                    }}
                     className="rounded-[10px] bg-[#e25d0a] px-5 py-2.5 text-[13.5px] font-semibold text-white hover:bg-[#e25d0a]/85 disabled:opacity-60 cursor-pointer"
                   >
                     {savingConfig ? 'جاري التحديث...' : 'حفظ الإعدادات'}
                   </button>
-                </div>
+                </form>
               </div>
 
               <div className="rounded-[16px] border border-[#26262b] bg-[#151518] p-5 space-y-4">

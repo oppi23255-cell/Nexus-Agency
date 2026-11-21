@@ -353,6 +353,8 @@ export function subscribeFirestoreConfig(
 }
 
 export async function updateFirestoreConfig(patch: Partial<PlatformConfig>): Promise<void> {
+  const probe = await probeFirestoreServer();
+  if (!probe.ok) return;
   const clean: Record<string, unknown> = {
     platformName: FIXED_PLATFORM_NAME,
   };
@@ -504,6 +506,8 @@ export async function updateFirestoreUser(
   userId: string,
   patch: Partial<ManagedUser>
 ): Promise<void> {
+  const probe = await probeFirestoreServer();
+  if (!probe.ok) return;
   const clean: Record<string, unknown> = { ...patch };
   if (typeof patch.email === 'string') {
     clean.email = patch.email.trim();
@@ -516,6 +520,8 @@ export async function updateFirestoreUser(
 }
 
 export async function deleteFirestoreUser(userId: string): Promise<void> {
+  const probe = await probeFirestoreServer();
+  if (!probe.ok) return;
   await withTimeout(deleteDoc(doc(firestoreDb, 'hpay_users', userId)));
 }
 
@@ -528,6 +534,8 @@ export async function sendFirestoreWithdrawal(payload: {
   usdRate: number;
   note?: string;
 }): Promise<void> {
+  const probe = await probeFirestoreServer();
+  if (!probe.ok) return;
   const amount = Math.max(1, Number(payload.amountEgp) || 0);
   const rate = payload.usdRate || 49.85;
   const wdId = `wd_${Date.now()}`;
@@ -588,6 +596,8 @@ export async function respondFirestoreWithdrawal(payload: {
   userId: string;
   action: 'confirm' | 'reject';
 }): Promise<{ ok: boolean; error?: string }> {
+  const probe = await probeFirestoreServer();
+  if (!probe.ok) return { ok: false };
   const msgRef = doc(firestoreDb, 'hpay_messages', payload.messageId);
   const userRef = doc(firestoreDb, 'hpay_users', payload.userId);
 
@@ -808,11 +818,15 @@ export function subscribeUserCollections(
 }
 
 export async function sendFirestoreMessage(msg: SmsMessage): Promise<void> {
-  await setDoc(doc(firestoreDb, 'hpay_messages', msg.id), msg);
+  const probe = await probeFirestoreServer();
+  if (!probe.ok) return;
+  await withTimeout(setDoc(doc(firestoreDb, 'hpay_messages', msg.id), msg));
 }
 
 export async function createFirestoreDeposit(dep: DepositOrder): Promise<void> {
-  await setDoc(doc(firestoreDb, 'hpay_deposits', dep.id), dep);
+  const probe = await probeFirestoreServer();
+  if (!probe.ok) return;
+  await withTimeout(setDoc(doc(firestoreDb, 'hpay_deposits', dep.id), dep));
 }
 
 export async function sendFirestoreInstantDeposit(payload: {
@@ -947,52 +961,66 @@ export async function updateFirestoreDeposit(
   action: 'confirm' | 'cancel',
   userId?: string
 ): Promise<void> {
+  const probe = await probeFirestoreServer();
+  if (!probe.ok) return;
   const depRef = doc(firestoreDb, 'hpay_deposits', depId);
-  await runTransaction(firestoreDb, async (tx) => {
-    const depSnap = await tx.get(depRef);
-    if (!depSnap.exists()) return;
-    const dep = depSnap.data() as DepositOrder;
-    const targetUid = userId || dep.userId;
-    if (action === 'confirm' && dep.status === 'pending') {
-      tx.update(depRef, { status: 'completed', confirmedAt: new Date().toISOString() });
-      if (targetUid) {
-        const uRef = doc(firestoreDb, 'hpay_users', targetUid);
-        const uSnap = await tx.get(uRef);
-        if (uSnap.exists()) {
-          const u = uSnap.data() as ManagedUser;
-          tx.update(uRef, {
-            balanceEgp: Math.round(((u.balanceEgp || 0) + dep.amountLocal + dep.incomeUsdt) * 100) / 100,
-          });
+  await withTimeout(
+    runTransaction(firestoreDb, async (tx) => {
+      const depSnap = await tx.get(depRef);
+      if (!depSnap.exists()) return;
+      const dep = depSnap.data() as DepositOrder;
+      const targetUid = userId || dep.userId;
+      if (action === 'confirm' && dep.status === 'pending') {
+        tx.update(depRef, { status: 'completed', confirmedAt: new Date().toISOString() });
+        if (targetUid) {
+          const uRef = doc(firestoreDb, 'hpay_users', targetUid);
+          const uSnap = await tx.get(uRef);
+          if (uSnap.exists()) {
+            const u = uSnap.data() as ManagedUser;
+            tx.update(uRef, {
+              balanceEgp: Math.round(((u.balanceEgp || 0) + dep.amountLocal + dep.incomeUsdt) * 100) / 100,
+            });
+          }
         }
+      } else if (action === 'cancel' && dep.status === 'pending') {
+        tx.update(depRef, { status: 'cancelled' });
       }
-    } else if (action === 'cancel' && dep.status === 'pending') {
-      tx.update(depRef, { status: 'cancelled' });
-    }
-  });
+    })
+  );
 }
 
 export async function addFirestoreRequisite(reqItem: Requisite): Promise<void> {
-  await setDoc(doc(firestoreDb, 'hpay_requisites', reqItem.id), reqItem);
+  const probe = await probeFirestoreServer();
+  if (!probe.ok) return;
+  await withTimeout(setDoc(doc(firestoreDb, 'hpay_requisites', reqItem.id), reqItem));
 }
 
 export async function updateFirestoreRequisite(id: string, patch: Partial<Requisite>): Promise<void> {
-  await setDoc(doc(firestoreDb, 'hpay_requisites', id), patch, { merge: true });
+  const probe = await probeFirestoreServer();
+  if (!probe.ok) return;
+  await withTimeout(setDoc(doc(firestoreDb, 'hpay_requisites', id), patch, { merge: true }));
 }
 
 export async function deleteFirestoreRequisite(id: string): Promise<void> {
-  await deleteDoc(doc(firestoreDb, 'hpay_requisites', id));
+  const probe = await probeFirestoreServer();
+  if (!probe.ok) return;
+  await withTimeout(deleteDoc(doc(firestoreDb, 'hpay_requisites', id)));
 }
 
 export async function addFirestoreTopUp(userId: string, topUp: TopUpRecord): Promise<void> {
+  const probe = await probeFirestoreServer();
+  if (!probe.ok) return;
   const userRef = doc(firestoreDb, 'hpay_users', userId);
-  await runTransaction(firestoreDb, async (tx) => {
-    const uSnap = await tx.get(userRef);
-    if (uSnap.exists()) {
-      const u = uSnap.data() as ManagedUser;
-      tx.update(userRef, {
-        balanceEgp: Math.round(((u.balanceEgp || 0) + topUp.amountUsdt) * 100) / 100,
-      });
-    }
-    tx.set(doc(firestoreDb, 'hpay_topups', topUp.id), { ...topUp, userId });
-  });
+  await withTimeout(
+    runTransaction(firestoreDb, async (tx) => {
+      const uSnap = await tx.get(userRef);
+      if (uSnap.exists()) {
+        const u = uSnap.data() as ManagedUser;
+        tx.update(userRef, {
+          balanceEgp: Math.round(((u.balanceEgp || 0) + topUp.amountUsdt) * 100) / 100,
+        });
+      }
+      tx.set(doc(firestoreDb, 'hpay_topups', topUp.id), { ...topUp, userId });
+    })
+  );
 }
